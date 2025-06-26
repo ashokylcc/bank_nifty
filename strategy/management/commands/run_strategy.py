@@ -29,8 +29,10 @@ def get_token_from_symbol(symbol):
         raise Exception(f"❌ Symbol {symbol} not found in contract master")
     return str(row.iloc[0]['Token'])
 
+from datetime import datetime, time as dt_time
+
 class Command(BaseCommand):
-    help = "Run Bank Nifty Strategy using real-time LTP from live_ltp.py"
+    help = "Run Bank Nifty Option Strategy"
 
     def handle(self, *args, **kwargs):
         now = datetime.now().time()
@@ -39,17 +41,25 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR("❌ No active strategy config found."))
             return
 
-        direction = config.future_entry_direction
-        strike = int(config.closing_price)
+        # Manual configs
+        LOT_SIZE = 1
+        TARGET_PROFIT = 250  # ₹ per lot
+        STOPLOSS = 250       # ₹ per lot
+        SQUARE_OFF_TIME = dt_time(9, 45)
 
-        # Generate trading symbol
+        # Determine direction and option symbol
+        direction = config.future_entry_direction.upper()
         if direction == "BUY":
-            option_symbol = f"BANKNIFTY26JUN25C56300"
+            option_symbol = f"BANKNIFTY26JUN25C56600"
+        elif direction == "SELL":
+            option_symbol = f"BANKNIFTY26JUN25P56600"
         else:
-            option_symbol = f"BANKNIFTY26JUN25P56300"
+            self.stdout.write(self.style.ERROR("❌ Invalid direction in config."))
+            return
 
         self.stdout.write(self.style.SUCCESS(f"📌 Direction: {direction}, Symbol: {option_symbol}"))
 
+        # Get session
         try:
             enc_key = get_encryption_key(USER_ID)
             session_id = get_session_id(USER_ID, API_KEY, enc_key)
@@ -58,35 +68,40 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f"❌ Login failed: {e}"))
             return
 
-        # try:
-        #     download_contract_master()
-        #     token = get_token_from_symbol(option_symbol)
-        #     self.stdout.write(self.style.SUCCESS(f"🔍 Token for {option_symbol}: {token}"))
-        # except Exception as e:
-        #     self.stdout.write(self.style.ERROR(f"❌ Error: {e}"))
-        #     return
-
         # Get entry price from WebSocket LTP
-        #entry_price = get_live_ltp(option_symbol, session_id=session_id, exchange='NFO')
-        entry_price = get_live_ltp(option_symbol,session_id)
-
+        entry_price = get_live_ltp(option_symbol, session_id=session_id, exchange='NFO')
         if not entry_price:
             self.stdout.write(self.style.ERROR("❌ Live LTP not received."))
             return
 
         self.stdout.write(self.style.SUCCESS(f"💰 Entry Price: {entry_price}"))
 
-        # Simulate price movement (replace with live trailing LTP if needed)
-        current_ltp = entry_price + 35
-        pnl = (current_ltp - entry_price) * config.lot_size
-
+        # Main loop: Monitor LTP until target, stoploss, or 9:45
         status = "HOLD"
-        if pnl >= config.target:
-            status = "TARGET HIT"
-        elif pnl <= -config.stoploss:
-            status = "STOPLOSS HIT"
-        elif now >= dt_time(9, 45):
-            status = "TIME EXIT"
+        exit_price = entry_price
+        pnl = 0
+
+        import time
+        while True:
+            now = datetime.now().time()
+            if now >= SQUARE_OFF_TIME:
+                status = "TIME EXIT"
+                exit_price = get_live_ltp(option_symbol, session_id=session_id, exchange='NFO')
+                break
+
+            current_ltp = get_live_ltp(option_symbol, session_id=session_id, exchange='NFO')
+            pnl = (current_ltp - entry_price) * LOT_SIZE if direction == "BUY" else (entry_price - current_ltp) * LOT_SIZE
+
+            if pnl >= TARGET_PROFIT:
+                status = "TARGET HIT"
+                exit_price = current_ltp
+                break
+            elif pnl <= -STOPLOSS:
+                status = "STOPLOSS HIT"
+                exit_price = current_ltp
+                break
+
+            time.sleep(5)  # Poll every 5 seconds
 
         # Extract strike price from symbol
         strike_price = int(''.join(filter(str.isdigit, option_symbol.split('C')[-1] if 'C' in option_symbol else option_symbol.split('P')[-1])))
@@ -98,11 +113,10 @@ class Command(BaseCommand):
             strike_price=strike_price,
             direction=direction,
             entry_price=entry_price,
-            exit_price=current_ltp,
-            pnl=pnl,    
+            exit_price=exit_price,
+            pnl=pnl,
             status=status,
-            message=f"Trade executed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            message=f"Trade exited at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
-
 
         self.stdout.write(self.style.SUCCESS(f"✅ Trade Logged | {status} | PnL: ₹{pnl:.2f}"))
