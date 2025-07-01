@@ -1,140 +1,61 @@
-import ssl
-ssl._create_default_https_context = ssl._create_unverified_context
-
-from alice_blue import AliceBlue, LiveFeedType
-import time
+# strategy/broker/live_ltp.py
 
 import time
 from alice_blue import AliceBlue, LiveFeedType
 
-def get_live_ltp(symbol_name, session_id, exchange='NFO', simulate=False):
-    import time
-    from alice_blue import AliceBlue, LiveFeedType
+class WebSocketLTP:
+    def __init__(self, username, session_id, exchange="NFO"):
+        self.username = username
+        self.session_id = session_id
+        self.exchange = exchange
+        self.alice = AliceBlue(username=self.username, session_id=self.session_id, master_contracts_to_download=[exchange])
+        self.connected = False
+        self.ltp_holder = {}
+        self.instrument_map = {}  # store instrument per symbol
 
-    if simulate:
-        print(f"🎭 Simulated LTP for {symbol_name}: ₹123.45")
-        return 123.45
-
-    username = "1293756"  # Replace with your AliceBlue client ID
-    alice = AliceBlue(username=username, session_id=session_id, master_contracts_to_download=[exchange])
-
-    print(f"📡 Requesting live LTP for: {symbol_name} on {exchange}")
-
-    ltp_holder = {'ltp': None}
-    connected = {'status': False}
-    error = {'msg': None}
-    closed = {'status': False}
-
-    def open_callback():
+    def _open_callback(self):
         print("✅ WebSocket connected.")
-        connected['status'] = True
-        time.sleep(1)  # Add delay to ensure WebSocket is ready before subscribing
+        self.connected = True
 
-        instrument = alice.get_instrument_by_symbol(exchange, symbol_name)
-        if instrument is None:
-            print(f"❌ Instrument {symbol_name} not found.")
+    def _tick_callback(self, tick):
+        instrument = tick.get("instrument")
+        if instrument and 'ltp' in tick:
+            symbol = instrument.symbol
+            self.ltp_holder[symbol] = tick["ltp"]
+            print(f"📩 Tick received for: {symbol}, LTP: ₹{tick['ltp']}")
+
+    def _error_callback(self, err):
+        print(f"❌ WebSocket error: {err}")
+
+    def _close_callback(self):
+        print("🔌 WebSocket closed.")
+
+    def start(self):
+        self.alice.start_websocket(
+            subscribe_callback=self._tick_callback,
+            socket_open_callback=self._open_callback,
+            socket_error_callback=self._error_callback,
+            socket_close_callback=self._close_callback
+        )
+
+    def subscribe(self, symbol):
+        while not self.connected:
+            print("⏳ Waiting for WebSocket connection...")
+            time.sleep(0.2)
+
+        instrument = self.alice.get_instrument_by_symbol(self.exchange, symbol)
+        if not instrument:
+            print(f"❌ Instrument not found: {symbol}")
             return
 
-        print(f"🔎 Instrument fetched: {instrument}")
-        print(f"🔔 Subscribing to {instrument.symbol}")
-        alice.subscribe(instrument, LiveFeedType.TICK_DATA)
+        self.instrument_map[symbol] = instrument
+        self.alice.subscribe(instrument, LiveFeedType.TICK_DATA)
+        print(f"🔔 Subscribed to: {symbol}")
 
-    def tick_callback(tick):
-        instrument = tick.get('instrument')
-        if instrument:
-            print(f"📩 Tick received for: {instrument.symbol}, Data: {tick}")
-            if instrument.symbol == symbol_name and 'ltp' in tick:
-                ltp_holder['ltp'] = tick['ltp']
-
-    def error_callback(err):
-        print(f"❌ WebSocket error: {err}")
-        error['msg'] = err
-
-    def close_callback():
-        print("🔌 WebSocket closed.")
-        closed['status'] = True
-
-    try:
-        alice.start_websocket(
-            subscribe_callback=tick_callback,
-            socket_open_callback=open_callback,
-            socket_error_callback=error_callback,
-            socket_close_callback=close_callback,
-        )
-
-        # Wait for WebSocket connection
-        wait_start = time.time()
-        while not connected['status'] and (time.time() - wait_start) < 5:
-            print("🔄 Waiting for WebSocket connection...")
-            time.sleep(0.2)
-
-        print("⏳ Waiting for LTP update...")
-        timeout = 10  # seconds
+    def get_ltp(self, symbol, timeout=10):
         start = time.time()
-
-        while ltp_holder['ltp'] is None and (time.time() - start) < timeout and not error['msg']:
+        while symbol not in self.ltp_holder and time.time() - start < timeout:
+            print(f"⏳ Waiting for LTP of {symbol}...")
             time.sleep(0.2)
 
-        if ltp_holder['ltp'] is not None:
-            print(f"✅ Final LTP: {symbol_name} = ₹{ltp_holder['ltp']}")
-        elif closed['status']:
-            print("❌ WebSocket closed before LTP received.")
-        elif error['msg']:
-            print(f"❌ WebSocket error: {error['msg']}")
-        else:
-            print(f"❌ LTP not received within {timeout} seconds.")
-
-    except Exception as e:
-        print(f"❌ Exception occurred while connecting: {e}")
-        return None
-
-    return ltp_holder['ltp']
-
-
-
-
-def test_websocket_connection(session_id, exchange='NFO'):
-    username = "1293756"
-    alice = AliceBlue(username=username, session_id=session_id, master_contracts_to_download=[exchange])
-    print(f"📈 Testing WebSocket connection for {username}... ")
-
-    connected = {'status': False}
-    error = {'msg': None}
-    closed = {'status': False}
-
-    def open_callback():
-        print("✅ WebSocket connected.")
-        connected['status'] = True
-
-    def error_callback(err):
-        print(f"❌ WebSocket error: {err}")
-        error['msg'] = err
-
-    def close_callback():
-        print("🔌 WebSocket closed.")
-        closed['status'] = True
-
-    try:
-        alice.start_websocket(
-            socket_open_callback=open_callback,
-            socket_error_callback=error_callback,
-            socket_close_callback=close_callback,
-        )
-
-        import time
-        print("⏳ Waiting for websocket connection...")
-        wait_time = 10  # seconds
-        start = time.time()
-        while not connected['status'] and not error['msg'] and (time.time() - start) < wait_time:
-            time.sleep(0.2)
-        if connected['status']:
-            print("✅ WebSocket connection established successfully.")
-        elif error['msg']:
-            print(f"❌ WebSocket connection failed with error: {error['msg']}")
-        else:
-            print("❌ WebSocket did not connect within timeout.")
-    except Exception as e:
-        print(f"❌ WebSocket connection failed: {e}")   
-
-# Usage:
-# test_websocket_connection(session_id)
+        return self.ltp_holder.get(symbol)

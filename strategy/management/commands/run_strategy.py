@@ -7,29 +7,7 @@ from datetime import datetime, time as dt_time
 from django.core.management.base import BaseCommand
 from strategy.models import TradeConfig, TradeLog
 from strategy.broker.alice_client import get_encryption_key, get_session_id, USER_ID, API_KEY
-from strategy.broker.live_ltp import get_live_ltp, test_websocket_connection
-
-CONTRACT_MASTER_URL = "https://v2api.aliceblueonline.com/restpy/static/contract_master/NFO.csv"
-CONTRACT_MASTER_FILE = "NFO.csv"
-
-def download_contract_master():
-    if os.path.exists(CONTRACT_MASTER_FILE):
-        os.remove(CONTRACT_MASTER_FILE)
-    resp = requests.get(CONTRACT_MASTER_URL)
-    if resp.status_code == 200:
-        with open(CONTRACT_MASTER_FILE, "wb") as f:
-            f.write(resp.content)
-    else:
-        raise Exception("❌ Failed to download contract master")
-
-def get_token_from_symbol(symbol):
-    df = pd.read_csv(CONTRACT_MASTER_FILE)
-    row = df[df['Trading Symbol'] == symbol]
-    if row.empty:
-        raise Exception(f"❌ Symbol {symbol} not found in contract master")
-    return str(row.iloc[0]['Token'])
-
-from datetime import datetime, time as dt_time
+from strategy.broker.live_ltp import WebSocketLTP
 
 class Command(BaseCommand):
     help = "Run Bank Nifty Option Strategy"
@@ -50,9 +28,9 @@ class Command(BaseCommand):
         # Determine direction and option symbol
         direction = config.future_entry_direction.upper()
         if direction == "BUY":
-            option_symbol = f"BANKNIFTY26JUN25C56600"
+            option_symbol = f"BANKNIFTY31JUL25C57600"
         elif direction == "SELL":
-            option_symbol = f"BANKNIFTY26JUN25P56600"
+            option_symbol = f"BANKNIFTY31JUL25P57600"
         else:
             self.stdout.write(self.style.ERROR("❌ Invalid direction in config."))
             return
@@ -68,15 +46,21 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f"❌ Login failed: {e}"))
             return
 
-        # Get entry price from WebSocket LTP
-        entry_price = get_live_ltp(option_symbol, session_id=session_id, exchange='NFO')
+        # Start WebSocket LTP streamer
+        ltp_streamer = WebSocketLTP(username=USER_ID, session_id=session_id, exchange="NFO")
+        ltp_streamer.start()
+        ltp_streamer.subscribe(option_symbol)
+
+
+        # Get entry price
+        entry_price = ltp_streamer.get_ltp(option_symbol)
         if not entry_price:
             self.stdout.write(self.style.ERROR("❌ Live LTP not received."))
             return
 
         self.stdout.write(self.style.SUCCESS(f"💰 Entry Price: {entry_price}"))
 
-        # Main loop: Monitor LTP until target, stoploss, or 9:45
+        # Main loop: Monitor LTP until target, stoploss, or 3:15
         status = "HOLD"
         exit_price = entry_price
         pnl = 0
@@ -86,10 +70,10 @@ class Command(BaseCommand):
             now = datetime.now().time()
             if now >= SQUARE_OFF_TIME:
                 status = "TIME EXIT"
-                exit_price = get_live_ltp(option_symbol, session_id=session_id, exchange='NFO')
+                exit_price = ltp_streamer.get_ltp(option_symbol)
                 break
 
-            current_ltp = get_live_ltp(option_symbol, session_id=session_id, exchange='NFO')
+            current_ltp = ltp_streamer.get_ltp(option_symbol)
             pnl = (current_ltp - entry_price) * LOT_SIZE if direction == "BUY" else (entry_price - current_ltp) * LOT_SIZE
 
             if pnl >= TARGET_PROFIT:
@@ -101,7 +85,7 @@ class Command(BaseCommand):
                 exit_price = current_ltp
                 break
 
-            time.sleep(5)  # Poll every 5 seconds
+            time.sleep(5)
 
         # Extract strike price from symbol
         strike_price = int(''.join(filter(str.isdigit, option_symbol.split('C')[-1] if 'C' in option_symbol else option_symbol.split('P')[-1])))
