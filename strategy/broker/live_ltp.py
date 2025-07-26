@@ -1,5 +1,8 @@
 # strategy/broker/live_ltp.py
 
+import glob
+import json
+import os
 import time
 from alice_blue import AliceBlue, LiveFeedType
 
@@ -8,19 +11,21 @@ class WebSocketLTP:
         self.username = username
         self.session_id = session_id
         self.exchange = exchange
-        self.alice = AliceBlue(username=self.username, session_id=self.session_id, master_contracts_to_download=[exchange])
+        self.alice = AliceBlue(username=self.username, session_id=self.session_id)
         self.connected = False
         self.ltp_holder = {}
-        self.instrument_map = {}  # store instrument per symbol
+        self.instrument_map = {}  
+
 
     def _open_callback(self):
         print("✅ WebSocket connected.")
         self.connected = True
 
     def _tick_callback(self, tick):
+        #print(f"Tick received: {tick}")  # Print every tick
         instrument = tick.get("instrument")
         if instrument and 'ltp' in tick:
-            symbol = instrument.symbol
+            symbol = instrument.symbol.upper()
             self.ltp_holder[symbol] = tick["ltp"]
             print(f"📩 Tick received for: {symbol}, LTP: ₹{tick['ltp']}")
 
@@ -38,7 +43,7 @@ class WebSocketLTP:
             socket_close_callback=self._close_callback
         )
 
-    def subscribe(self, symbol):
+    def subscribe(self, symbol):  
         while not self.connected:
             print("⏳ Waiting for WebSocket connection...")
             time.sleep(0.2)
@@ -48,14 +53,22 @@ class WebSocketLTP:
             print(f"❌ Instrument not found: {symbol}")
             return
 
-        self.instrument_map[symbol] = instrument
+        self.instrument_map[symbol.upper()] = instrument
         self.alice.subscribe(instrument, LiveFeedType.TICK_DATA)
-        print(f"🔔 Subscribed to: {symbol}")
+        print(f"🔔 Subscribed to: {symbol} | Token: {instrument.token}")
 
-    def get_ltp(self, symbol, timeout=10):
+
+    def get_ltp(self, symbol, timeout=30):
+        symbol = symbol.upper()  # Ensure consistent key
         start = time.time()
-        while symbol not in self.ltp_holder and time.time() - start < timeout:
+        while time.time() - start < timeout:
+            ltp = self.ltp_holder.get(symbol)
+            if ltp is not None:
+                return ltp
             print(f"⏳ Waiting for LTP of {symbol}...")
-            time.sleep(0.2)
+            time.sleep(0.5)
+        print(f"❌ LTP not received for {symbol} within {timeout} seconds.")
+        return None
 
-        return self.ltp_holder.get(symbol)
+
+
