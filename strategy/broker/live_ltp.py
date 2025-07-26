@@ -36,27 +36,54 @@ class WebSocketLTP:
         print("🔌 WebSocket closed.")
 
     def start(self):
-        self.alice.start_websocket(
-            subscribe_callback=self._tick_callback,
-            socket_open_callback=self._open_callback,
-            socket_error_callback=self._error_callback,
-            socket_close_callback=self._close_callback
-        )
+        try:
+            self.alice.start_websocket(
+                subscribe_callback=self._tick_callback,
+                socket_open_callback=self._open_callback,
+                socket_error_callback=self._error_callback,
+                socket_close_callback=self._close_callback
+            )
+        except Exception as e:
+            print(f"❌ Error starting WebSocket: {e}")
+            raise
 
     def subscribe(self, symbol):  
-        while not self.connected:
+        # Wait for connection with timeout
+        timeout = 10  # 10 seconds timeout
+        start_time = time.time()
+        while not self.connected and (time.time() - start_time) < timeout:
             print("⏳ Waiting for WebSocket connection...")
-            time.sleep(0.2)
+            time.sleep(0.5)
+        
+        if not self.connected:
+            raise Exception("WebSocket connection timeout")
 
-        instrument = self.alice.get_instrument_by_symbol(self.exchange, symbol)
-        if not instrument:
-            print(f"❌ Instrument not found: {symbol}")
-            return
+        try:
+            instrument = self.alice.get_instrument_by_symbol(self.exchange, symbol)
+            if not instrument:
+                print(f"❌ Instrument not found: {symbol}")
+                print(f"💡 Available instruments in {self.exchange}:")
+                # Try to get some sample instruments
+                try:
+                    instruments = self.alice.searchscrip(symbol)
+                    if instruments:
+                        print(f"   Found {len(instruments)} similar instruments")
+                        for inst in instruments[:3]:  # Show first 3
+                            print(f"   • {inst.symbol}")
+                    else:
+                        print(f"   No instruments found for {symbol}")
+                except Exception as e:
+                    print(f"   Error searching instruments: {e}")
+                return False
 
-        self.instrument_map[symbol.upper()] = instrument
-        self.alice.subscribe(instrument, LiveFeedType.TICK_DATA)
-        print(f"🔔 Subscribed to: {symbol} | Token: {instrument.token}")
-
+            self.instrument_map[symbol.upper()] = instrument
+            self.alice.subscribe(instrument, LiveFeedType.TICK_DATA)
+            print(f"🔔 Subscribed to: {symbol} | Token: {instrument.token}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error subscribing to {symbol}: {e}")
+            return False
 
     def get_ltp(self, symbol, timeout=30):
         symbol = symbol.upper()  # Ensure consistent key
@@ -65,10 +92,17 @@ class WebSocketLTP:
             ltp = self.ltp_holder.get(symbol)
             if ltp is not None:
                 return ltp
-            print(f"⏳ Waiting for LTP of {symbol}...")
             time.sleep(0.5)
         print(f"❌ LTP not received for {symbol} within {timeout} seconds.")
         return None
+
+    def stop(self):
+        try:
+            if hasattr(self.alice, 'stop_websocket'):
+                self.alice.stop_websocket()
+            print("🔌 WebSocket stopped.")
+        except Exception as e:
+            print(f"❌ Error stopping WebSocket: {e}")
 
 
 
