@@ -29,7 +29,7 @@ class Command(BaseCommand):
         current_time = now.time()
 
         # Check if we're within trading hours (9:15 AM to 1:15 PM)
-        if current_time < dt_time(9, 15) or current_time > dt_time(14, 45):
+        if current_time < dt_time(9, 15) or current_time > dt_time(9, 45):
             self.stdout.write(self.style.WARNING(f"⏰ Outside trading hours. Current time: {current_time.strftime('%H:%M:%S')} IST. Trading window: 09:15-13:15"))
             return
 
@@ -43,7 +43,7 @@ class Command(BaseCommand):
         LOT_SIZE = 35  # BankNifty lot size
         TARGET_PROFIT = 500
         STOPLOSS = 500
-        SQUARE_OFF_TIME = dt_time(14, 45)  # Changed to 1:15 PM
+        SQUARE_OFF_TIME = dt_time(9, 45)  # Changed to 1:15 PM
         YESTERDAY_CLOSING = 56600  # Update this daily
 
         self.stdout.write(self.style.SUCCESS("🚀 Bank Nifty Future-Based Option Strategy"))
