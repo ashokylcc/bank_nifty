@@ -4,6 +4,7 @@ import os
 import pandas as pd
 import requests
 from datetime import datetime, time, date, timedelta
+import pytz
 from django.core.management.base import BaseCommand
 from strategy.models import TradeConfig, TradeLog
 from strategy.broker.alice_client import get_encryption_key, get_session_id, USER_ID, API_KEY
@@ -144,7 +145,9 @@ class Command(BaseCommand):
         self.stdout.write("\n📡 Test 5: Market Status")
         self.stdout.write("-" * 30)
         
-        now = datetime.now()
+        # Set timezone to IST
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
         current_time = now.time()
         
         # Check if market is open (9:15 AM to 3:30 PM)
@@ -153,20 +156,20 @@ class Command(BaseCommand):
         
         if market_open <= current_time <= market_close:
             self.stdout.write(self.style.SUCCESS("✅ Market is currently OPEN"))
-            self.stdout.write(f"🕐 Current time: {current_time.strftime('%H:%M:%S')}")
+            self.stdout.write(f"🕐 Current time: {current_time.strftime('%H:%M:%S')} IST")
             
             # Check if we're in strategy trading window
             strategy_start = time(9, 15)
-            strategy_end = time(9, 45)
+            strategy_end = time(14, 45)  # Extended for testing
             
             if strategy_start <= current_time <= strategy_end:
-                self.stdout.write(self.style.SUCCESS("🎯 Currently in strategy trading window (9:15-9:45 AM)"))
+                self.stdout.write(self.style.SUCCESS("🎯 Currently in strategy trading window (9:15-14:45)"))
             else:
-                self.stdout.write(self.style.WARNING("⚠️ Outside strategy trading window (9:15-9:45 AM)"))
+                self.stdout.write(self.style.WARNING("⚠️ Outside strategy trading window (9:15-14:45)"))
         else:
             self.stdout.write(self.style.WARNING("⚠️ Market is currently CLOSED"))
-            self.stdout.write(f"🕐 Current time: {current_time.strftime('%H:%M:%S')}")
-            self.stdout.write("💡 Strategy only runs during market hours (9:15-9:45 AM)")
+            self.stdout.write(f"🕐 Current time: {current_time.strftime('%H:%M:%S')} IST")
+            self.stdout.write("💡 Strategy only runs during market hours (9:15-14:45)")
         
         # Final Summary
         self.stdout.write("\n" + "=" * 50)
