@@ -44,7 +44,7 @@ class Command(BaseCommand):
         TARGET_PROFIT = 500
         STOPLOSS = 500
         SQUARE_OFF_TIME = dt_time(9, 45)  # Changed to 1:15 PM
-        YESTERDAY_CLOSING = 56600  # Update this daily
+        YESTERDAY_CLOSING = 56200  # Update this daily
 
         self.stdout.write(self.style.SUCCESS("🚀 Bank Nifty Future-Based Option Strategy"))
         self.stdout.write("=" * 50)
@@ -89,11 +89,17 @@ class Command(BaseCommand):
                 future_ltp = ltp_streamer.get_ltp(future_symbol)
                 if future_ltp:
                     break
-                print(f"🔁 Retry {attempt + 1}: Future LTP not received, retrying...")
+                self.stdout.write(f"🔁 Retry {attempt + 1}: Future LTP not received, retrying...")
                 time.sleep(2)
             
             if not future_ltp:
                 self.stdout.write(self.style.ERROR("❌ No LTP for future after retries."))
+                self.stdout.write(self.style.WARNING("💡 This usually happens when:"))
+                self.stdout.write("   • Market is closed (9:00 AM - 3:30 PM IST)")
+                self.stdout.write("   • Symbol is not available")
+                self.stdout.write("   • WebSocket connection issues")
+                self.stdout.write(f"   • Current time: {current_time.strftime('%H:%M:%S')} IST")
+                self.stdout.write(self.style.SUCCESS("💡 Try running with --simulate flag for testing"))
                 return
 
             self.stdout.write(f"✅ Current Future LTP: ₹{future_ltp}")
@@ -123,7 +129,7 @@ class Command(BaseCommand):
         if future_direction == "BUY":
             # Future is BUY → Buy Call Option
             # Use slightly OTM strike for better profit potential
-            strike_price = base_strike + 100  # OTM Call for better risk-reward
+            strike_price = base_strike  # OTM Call for better risk-reward
             option_symbol = f"BANKNIFTY{expiry}C{strike_price}"
             option_direction = "BUY"  # We're buying the call option
             self.stdout.write(self.style.SUCCESS(f"📞 FUTURE=BUY → BUY Call Option: {option_symbol}"))
@@ -131,7 +137,7 @@ class Command(BaseCommand):
         else:
             # Future is SELL → Buy Put Option
             # Use slightly OTM strike for better profit potential
-            strike_price = base_strike - 100  # OTM Put for better risk-reward
+            strike_price = base_strike  # OTM Put for better risk-reward
             option_symbol = f"BANKNIFTY{expiry}P{strike_price}"
             option_direction = "BUY"  # We're buying the put option
             self.stdout.write(self.style.SUCCESS(f"📞 FUTURE=SELL → BUY Put Option: {option_symbol}"))
