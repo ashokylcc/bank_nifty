@@ -43,8 +43,8 @@ class Command(BaseCommand):
         LOT_SIZE = 35  # BankNifty lot size
         TARGET_PROFIT = 500
         STOPLOSS = 500
-        SQUARE_OFF_TIME = dt_time(9, 45)  # Changed to 1:15 PM
-        YESTERDAY_CLOSING = 56200  # Update this daily
+        SQUARE_OFF_TIME = dt_time(9,45)  # Changed to 1:15 PM
+        YESTERDAY_CLOSING = 56400  # Update this daily
 
         self.stdout.write(self.style.SUCCESS("🚀 Bank Nifty Future-Based Option Strategy"))
         self.stdout.write("=" * 50)
@@ -82,27 +82,27 @@ class Command(BaseCommand):
             # For testing, use a simulated LTP based on yesterday's closing
             import random
             future_ltp = YESTERDAY_CLOSING + random.uniform(-200, 200)  # Simulate price movement
-            self.stdout.write(self.style.SUCCESS(f"✅ Simulated Future LTP: ₹{future_ltp:.2f} (for testing)"))
+            self.stdout.write(self.style.SUCCESS(f"✅ Simulated Future LTP: ₹{future_ltp:.2f}"))
         else:
-            max_retries = 10
+            max_retries = 5
             for attempt in range(max_retries):
                 future_ltp = ltp_streamer.get_ltp(future_symbol)
                 if future_ltp:
                     break
-                self.stdout.write(f"🔁 Retry {attempt + 1}: Future LTP not received, retrying...")
+                self.stdout.write(f"🔁 Retry {attempt + 1}/{max_retries}: Waiting for Future LTP...")
                 time.sleep(2)
             
             if not future_ltp:
-                self.stdout.write(self.style.ERROR("❌ No LTP for future after retries."))
-                self.stdout.write(self.style.WARNING("💡 This usually happens when:"))
+                self.stdout.write(self.style.ERROR("❌ Unable to get Future LTP after retries"))
+                self.stdout.write(self.style.WARNING("💡 Possible reasons:"))
                 self.stdout.write("   • Market is closed (9:00 AM - 3:30 PM IST)")
-                self.stdout.write("   • Symbol is not available")
-                self.stdout.write("   • WebSocket connection issues")
+                self.stdout.write("   • Symbol not available")
+                self.stdout.write("   • Connection issues")
                 self.stdout.write(f"   • Current time: {current_time.strftime('%H:%M:%S')} IST")
-                self.stdout.write(self.style.SUCCESS("💡 Try running with --simulate flag for testing"))
+                self.stdout.write(self.style.SUCCESS("💡 Use --simulate flag for testing"))
                 return
 
-            self.stdout.write(f"✅ Current Future LTP: ₹{future_ltp}")
+            self.stdout.write(f"✅ Future LTP: ₹{future_ltp}")
 
         # 🎯 Determine FUTURE Direction based on LTP vs Yesterday's Closing
         self.stdout.write("\n📈 Step: Determine FUTURE Direction")
@@ -158,7 +158,7 @@ class Command(BaseCommand):
             # For testing, use a simulated entry price
             import random
             entry_price = random.uniform(50, 200)  # Simulate option price
-            self.stdout.write(self.style.SUCCESS(f"💰 Simulated Entry Price: ₹{entry_price:.2f} (for testing)"))
+            self.stdout.write(self.style.SUCCESS(f"💰 Simulated Entry Price: ₹{entry_price:.2f}"))
         else:
             max_retries = 3
             entry_price = None
@@ -166,11 +166,11 @@ class Command(BaseCommand):
                 entry_price = ltp_streamer.get_ltp(option_symbol)
                 if entry_price:
                     break
-                print(f"🔁 Retry {attempt + 1}: Option LTP not received, retrying...")
+                self.stdout.write(f"🔁 Retry {attempt + 1}/{max_retries}: Waiting for Option LTP...")
                 time.sleep(3)
 
             if not entry_price:
-                self.stdout.write(self.style.ERROR("❌ Live LTP still not received after retries. Exiting."))
+                self.stdout.write(self.style.ERROR("❌ Unable to get Option LTP after retries"))
                 return
 
             self.stdout.write(self.style.SUCCESS(f"💰 Entry Price: ₹{entry_price}"))

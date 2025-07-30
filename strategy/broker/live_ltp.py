@@ -16,14 +16,16 @@ class WebSocketLTP:
         self.connected = True
 
     def _tick_callback(self, tick):
-        #print(f"🔍 Raw tick received: {tick}")
         instrument = tick.get("instrument")
         if instrument and 'ltp' in tick:
             symbol = instrument.symbol
             self.ltp_holder[symbol] = tick["ltp"]
             print(f"📩 Tick received for: {symbol}, LTP: ₹{tick['ltp']}")
+            # Only log occasionally to avoid spam
+            if len(self.ltp_holder) % 10 == 0:  # Log every 10th tick
+                print(f"📩 Tick: {symbol} = ₹{tick['ltp']}")
         else:
-            print(f"⚠️ Tick received but no instrument or LTP: {tick}")
+            print(f"⚠️ Invalid tick data received")
 
     def _error_callback(self, err):
         print(f"❌ WebSocket error: {err}")
@@ -44,7 +46,6 @@ class WebSocketLTP:
             print("⏳ Waiting for WebSocket connection...")
             time.sleep(0.2)
 
-        print(f"🔍 Looking up instrument for symbol: {symbol}")
         instrument = self.alice.get_instrument_by_symbol(self.exchange, symbol)
         if not instrument:
             print(f"❌ Instrument not found: {symbol}")
@@ -52,20 +53,15 @@ class WebSocketLTP:
             try:
                 instruments = self.alice.searchscrip(symbol)
                 if instruments:
-                    print(f"🔍 Found {len(instruments)} instruments via searchscrip")
                     instrument = instruments[0]
-                    print(f"✅ Using instrument: {instrument}")
                 else:
-                    print(f"❌ No instruments found via searchscrip either")
+                    print(f"❌ No instruments found for {symbol}")
                     return
             except Exception as e:
-                print(f"❌ Searchscrip failed: {e}")
+                print(f"❌ Lookup failed: {e}")
                 return
-        else:
-            print(f"✅ Instrument found: {instrument}")
 
         self.instrument_map[symbol] = instrument
-        print(f"🔔 Subscribing to: {symbol} with instrument: {instrument}")
         self.alice.subscribe(instrument, LiveFeedType.TICK_DATA)
         print(f"🔔 Subscribed to: {symbol}")
 
@@ -76,19 +72,13 @@ class WebSocketLTP:
         if symbol in self.ltp_holder:
             return self.ltp_holder.get(symbol)
         
-        # Wait for LTP with better logging
+        # Wait for LTP
         while symbol not in self.ltp_holder and time.time() - start < timeout:
             print(f"⏳ Waiting for LTP of {symbol}...")
-            time.sleep(0.5)  # Increased sleep time
-            
-            # Debug: show what symbols we have received
-            if len(self.ltp_holder) > 0:
-                print(f"📊 Available LTPs: {list(self.ltp_holder.keys())}")
+            time.sleep(0.5)
 
         if symbol in self.ltp_holder:
-            print(f"✅ LTP received for {symbol}: ₹{self.ltp_holder[symbol]}")
             return self.ltp_holder.get(symbol)
         else:
             print(f"❌ Timeout waiting for LTP of {symbol}")
-            print(f"📊 Available symbols: {list(self.ltp_holder.keys())}")
             return None
