@@ -65,20 +65,24 @@ class WebSocketLTP:
         self.alice.subscribe(instrument, LiveFeedType.TICK_DATA)
         print(f"🔔 Subscribed to: {symbol}")
 
-    def get_ltp(self, symbol, timeout=10):
+    def get_ltp(self, symbol, timeout=5):  # Reduced timeout from 10 to 5 seconds
         start = time.time()
         
         # First check if we already have the LTP
         if symbol in self.ltp_holder:
-            return self.ltp_holder.get(symbol)
+            ltp = self.ltp_holder.get(symbol)
+            print(f"✅ LTP already available for {symbol}: ₹{ltp}")
+            return ltp
         
-        # Wait for LTP
+        # Wait for LTP with shorter intervals
         while symbol not in self.ltp_holder and time.time() - start < timeout:
-            print(f"⏳ Waiting for LTP of {symbol}...")
-            time.sleep(0.5)
+            print(f"⏳ Waiting for LTP of {symbol}... ({timeout - int(time.time() - start)}s remaining)")
+            time.sleep(0.5)  # Check every 0.5 seconds instead of waiting longer
 
         if symbol in self.ltp_holder:
-            return self.ltp_holder.get(symbol)
+            ltp = self.ltp_holder.get(symbol)
+            print(f"✅ LTP received for {symbol}: ₹{ltp}")
+            return ltp
         else:
-            print(f"❌ Timeout waiting for LTP of {symbol}")
+            print(f"❌ Timeout waiting for LTP of {symbol} after {timeout}s")
             return None
