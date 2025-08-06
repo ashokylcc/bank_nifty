@@ -34,9 +34,9 @@ class Command(BaseCommand):
         now = datetime.now(ist)
         current_time = now.time()
 
-        # Check if we're within trading hours (9:15 AM to 1:15 PM)
-        if current_time < dt_time(9, 15) or current_time > dt_time(13, 15): # Changed to 1:15 PM
-            self.stdout.write(self.style.WARNING(f"⏰ Outside trading hours. Current time: {current_time.strftime('%H:%M:%S')} IST. Trading window: 09:15-13:15"))
+        # Check if we're within trading hours (9:15 AM to 9:45 AM)
+        if current_time < dt_time(9, 15) or current_time > dt_time(9, 45):
+            self.stdout.write(self.style.WARNING(f"⏰ Outside trading hours. Current time: {current_time.strftime('%H:%M:%S')} IST. Trading window: 09:15-09:45"))
             return
 
         config = TradeConfig.objects.filter(is_active=True).last()
@@ -47,10 +47,10 @@ class Command(BaseCommand):
         # 🔧 Manual settings
         CAPITAL = 30000
         LOT_SIZE = 35  # BankNifty lot size
-        TARGET_PROFIT = 500  # Default values
-        STOPLOSS = 500       # Default values
-        SQUARE_OFF_TIME = dt_time(13, 15)  # 1:15 PM
-        YESTERDAY_CLOSING = 56300  # Update this daily
+        TARGET_PROFIT = 500  # Target profit per lot
+        STOPLOSS = 1000       # Stoploss per lot
+        SQUARE_OFF_TIME = dt_time(9, 45)  # Exit at 9:45 AM
+        YESTERDAY_CLOSING = 55600  # Update this daily
 
         self.stdout.write(self.style.SUCCESS("🚀 Bank Nifty Future-Based Option Strategy"))
         self.stdout.write("=" * 50)
@@ -87,7 +87,7 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS("✅ WebSocket connection established"))
 
         # 📊 Get Bank Nifty Future Symbol and LTP
-        future_symbol = "BANKNIFTY31JUL25F"  # Active future symbol
+        future_symbol = "BANKNIFTY28AUG25F"  # Active future symbol
         if not simulate and ltp_streamer:
             ltp_streamer.subscribe(future_symbol)
         
@@ -140,16 +140,16 @@ class Command(BaseCommand):
         price_change_percent = abs((future_ltp - YESTERDAY_CLOSING) / YESTERDAY_CLOSING * 100)
         
         if price_change_percent > 0.5:  # Strong trend
-            TARGET_PROFIT = 600  # Higher target for strong trends
-            STOPLOSS = 400       # Tighter stoploss for strong trends
+            TARGET_PROFIT = 1000  # Higher target for strong trends
+            STOPLOSS = 1000       # Tighter stoploss for strong trends
             self.stdout.write(self.style.SUCCESS(f"🎯 Strong trend detected - Target: ₹{TARGET_PROFIT}, Stoploss: ₹{STOPLOSS}"))
         elif price_change_percent > 0.2:  # Moderate trend
-            TARGET_PROFIT = 500  # Standard target
-            STOPLOSS = 500       # Standard stoploss
+            TARGET_PROFIT = 1000  # Standard target
+            STOPLOSS = 1000       # Standard stoploss
             self.stdout.write(self.style.SUCCESS(f"🎯 Moderate trend - Target: ₹{TARGET_PROFIT}, Stoploss: ₹{STOPLOSS}"))
         else:  # Weak trend
-            TARGET_PROFIT = 400  # Lower target for weak trends
-            STOPLOSS = 600       # Wider stoploss for weak trends
+            TARGET_PROFIT = 600  # Lower target for weak trends
+            STOPLOSS = 1000       # Wider stoploss for weak trends
             self.stdout.write(self.style.WARNING(f"🎯 Weak trend - Target: ₹{TARGET_PROFIT}, Stoploss: ₹{STOPLOSS}"))
 
         # 🎯 Determine FUTURE Direction based on LTP vs Yesterday's Closing
@@ -167,13 +167,13 @@ class Command(BaseCommand):
             future_direction = "SELL"  # Future is below yesterday's closing
             self.stdout.write(self.style.SUCCESS(f"📉 FUTURE Direction: SELL (Price down ₹{abs(price_change):.2f} from yesterday's closing)"))
 
-        # 🎯 NEW: Market Condition Analysis
+        # 🎯 NEW: Market Condition Analysis - REDUCED THRESHOLD
         self.stdout.write("\n🔍 Step: Market Condition Analysis")
         self.stdout.write("-" * 30)
         
-        # Check if market movement is significant enough
-        min_movement = 100  # Minimum ₹100 movement required
-        min_percent = 0.2   # Minimum 0.2% movement required
+        # Check if market movement is significant enough - REDUCED FROM ₹100 TO ₹70
+        min_movement = 70  # Minimum ₹70 movement required (reduced from ₹100)
+        min_percent = 0.15   # Minimum 0.15% movement required (reduced from 0.2%)
         
         if abs(price_change) < min_movement:
             self.stdout.write(self.style.WARNING(f"⚠️ Insufficient market movement: ₹{abs(price_change):.2f} (need ₹{min_movement})"))
@@ -221,41 +221,39 @@ class Command(BaseCommand):
         self.stdout.write("\n🎯 Step: Select Option Based on Future Direction")
         self.stdout.write("-" * 30)
         
-        # Enhanced strike selection for better profit probability
-        base_strike = int(round(YESTERDAY_CLOSING / 100.0) * 100)
-        expiry = "31JUL25"  # Or get dynamically
-        
+        # SPECIFIC OPTION SELECTION FOR YOUR REQUIREMENT
         if future_direction == "BUY":
             # Future is BUY → Buy Call Option
-            # Use ATM strike for better probability (less risk)
+            # Use specific strike 55800 as requested
+            base_strike = int(round(YESTERDAY_CLOSING / 100.0) * 100)
             strike_price = base_strike  # ATM Call for better probability
-            option_symbol = f"BANKNIFTY{expiry}C{strike_price}"
+            option_symbol = f"BANKNIFTY28AUG25C{strike_price}"  # Specific call option as requested
             option_direction = "BUY"  # We're buying the call option
             self.stdout.write(self.style.SUCCESS(f"📞 FUTURE=BUY → BUY Call Option: {option_symbol}"))
-            self.stdout.write(f"   💡 Strategy: ATM Call (₹{strike_price}) for better probability")
+            self.stdout.write(f"   💡 Strategy: Call Option (₹{strike_price}) for BUY signal")
         else:
             # Future is SELL → Buy Put Option
-            # Use ATM strike for better probability (less risk)
+            # Use ATM strike for better probability
+            base_strike = int(round(YESTERDAY_CLOSING / 100.0) * 100)
             strike_price = base_strike  # ATM Put for better probability
-            option_symbol = f"BANKNIFTY{expiry}P{strike_price}"
+            option_symbol = f"BANKNIFTY28AUG25P{strike_price}"
             option_direction = "BUY"  # We're buying the put option
             self.stdout.write(self.style.SUCCESS(f"📞 FUTURE=SELL → BUY Put Option: {option_symbol}"))
             self.stdout.write(f"   💡 Strategy: ATM Put (₹{strike_price}) for better probability")
 
-        self.stdout.write(f"🎯 Base Strike: ₹{base_strike} (based on yesterday's closing: ₹{YESTERDAY_CLOSING})")
-        self.stdout.write(f"🎯 Selected Strike: ₹{strike_price} (ATM for better probability)")
+        self.stdout.write(f"🎯 Yesterday's Closing: ₹{YESTERDAY_CLOSING}")
+        self.stdout.write(f"🎯 Selected Strike: ₹{strike_price}")
         
         # 🎯 NEW: Risk Management Check
         self.stdout.write("\n🛡️ Step: Risk Management")
         self.stdout.write("-" * 30)
         
-        # Only proceed if we have strong trend
-        if strong_trend:
-            self.stdout.write(self.style.SUCCESS("✅ Strong trend - proceeding with trade"))
+        # Only proceed if we have sufficient movement
+        if abs(price_change) >= min_movement:
+            self.stdout.write(self.style.SUCCESS("✅ Sufficient movement - proceeding with trade"))
         else:
-            self.stdout.write(self.style.WARNING("⚠️ Weak trend - consider skipping or reducing position"))
-            # For weak trends, we can still trade but with caution
-            self.stdout.write(self.style.WARNING("💡 Proceeding with caution - weak trend detected"))
+            self.stdout.write(self.style.WARNING("⚠️ Insufficient movement - consider skipping"))
+            return
 
         # 📡 Subscribe to Option and Get Entry Price
         self.stdout.write("\n📡 Step: Subscribe to Option")
@@ -354,7 +352,7 @@ class Command(BaseCommand):
             while True:
                 current_time = datetime.now(ist).time()
                 
-                # Check if we've reached trade end time (1:15 PM)
+                # Check if we've reached trade end time (9:45 AM)
                 if current_time >= SQUARE_OFF_TIME:
                     status = "TIME EXIT"
                     exit_price = ltp_streamer.get_ltp(option_symbol)
