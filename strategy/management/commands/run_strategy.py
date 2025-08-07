@@ -97,11 +97,9 @@ class Command(BaseCommand):
         if simulate:
             # For testing, use a simulated LTP based on yesterday's closing
             import random
-            # Generate stronger movements for testing
-            movement_percent = random.uniform(0.3, 1.0)  # 0.3% to 1.0% movement
-            movement_direction = random.choice([-1, 1])  # Random up or down
-            future_ltp = YESTERDAY_CLOSING + (movement_direction * YESTERDAY_CLOSING * movement_percent / 100)
-            self.stdout.write(self.style.SUCCESS(f"✅ Simulated Future LTP: ₹{future_ltp:.2f}"))
+            # Test with exactly ₹70 movement for BUY signal
+            future_ltp = YESTERDAY_CLOSING + 70  # Exactly ₹70 up for BUY signal
+            self.stdout.write(self.style.SUCCESS(f"✅ Simulated Future LTP: ₹{future_ltp:.2f} (₹70 up)"))
         else:
             max_retries = 5
             for attempt in range(max_retries):
@@ -140,15 +138,15 @@ class Command(BaseCommand):
         price_change_percent = abs((future_ltp - YESTERDAY_CLOSING) / YESTERDAY_CLOSING * 100)
         
         if price_change_percent > 0.5:  # Strong trend
-            TARGET_PROFIT = 1000  # Higher target for strong trends
+            TARGET_PROFIT = 600  # Higher target for strong trends
             STOPLOSS = 1000       # Tighter stoploss for strong trends
             self.stdout.write(self.style.SUCCESS(f"🎯 Strong trend detected - Target: ₹{TARGET_PROFIT}, Stoploss: ₹{STOPLOSS}"))
         elif price_change_percent > 0.2:  # Moderate trend
-            TARGET_PROFIT = 1000  # Standard target
+            TARGET_PROFIT = 500  # Standard target
             STOPLOSS = 1000       # Standard stoploss
             self.stdout.write(self.style.SUCCESS(f"🎯 Moderate trend - Target: ₹{TARGET_PROFIT}, Stoploss: ₹{STOPLOSS}"))
         else:  # Weak trend
-            TARGET_PROFIT = 600  # Lower target for weak trends
+            TARGET_PROFIT = 400  # Lower target for weak trends
             STOPLOSS = 1000       # Wider stoploss for weak trends
             self.stdout.write(self.style.WARNING(f"🎯 Weak trend - Target: ₹{TARGET_PROFIT}, Stoploss: ₹{STOPLOSS}"))
 
@@ -173,17 +171,69 @@ class Command(BaseCommand):
         
         # Check if market movement is significant enough - REDUCED FROM ₹100 TO ₹70
         min_movement = 70  # Minimum ₹70 movement required (reduced from ₹100)
-        min_percent = 0.15   # Minimum 0.15% movement required (reduced from 0.2%)
+        min_percent = 0.10   # Minimum 0.10% movement required (reduced from 0.15%)
         
+        # 🎯 NEW: Continuous Monitoring Instead of Skipping
         if abs(price_change) < min_movement:
-            self.stdout.write(self.style.WARNING(f"⚠️ Insufficient market movement: ₹{abs(price_change):.2f} (need ₹{min_movement})"))
-            self.stdout.write(self.style.WARNING("💡 Skipping trade - market too sideways"))
-            return
+            self.stdout.write(self.style.WARNING(f"⚠️ Weak movement detected: ₹{abs(price_change):.2f} (need ₹{min_movement})"))
+            self.stdout.write(self.style.SUCCESS("🔄 Starting continuous monitoring mode..."))
+            self.stdout.write(self.style.SUCCESS("💡 Will take entry when movement becomes sufficient"))
+            
+            # 🎯 NEW: Continuous Monitoring Loop
+            self.stdout.write("\n🔄 Step: Continuous Monitoring Mode")
+            self.stdout.write("-" * 30)
+            
+            monitoring_start_time = datetime.now(ist)
+            max_monitoring_time = 25 * 60  # 25 minutes (until 9:40 AM)
+            
+            while True:
+                current_time = datetime.now(ist).time()
+                
+                # Check if we've reached trade end time (9:45 AM)
+                if current_time >= SQUARE_OFF_TIME:
+                    self.stdout.write(self.style.WARNING("⏰ Time's up! No sufficient movement detected."))
+                    return
+                
+                # Check if we've been monitoring too long (25 minutes max)
+                elapsed_minutes = (datetime.now(ist) - monitoring_start_time).seconds / 60
+                if elapsed_minutes >= max_monitoring_time:
+                    self.stdout.write(self.style.WARNING("⏰ Monitoring time limit reached. No sufficient movement."))
+                    return
+                
+                # Get updated Future LTP
+                if not simulate and ltp_streamer:
+                    updated_future_ltp = ltp_streamer.get_ltp(future_symbol)
+                    if updated_future_ltp:
+                        future_ltp = updated_future_ltp
+                        price_change = future_ltp - YESTERDAY_CLOSING
+                        price_change_percent = (price_change / YESTERDAY_CLOSING) * 100
+                        
+                        # Update direction
+                        if price_change > 0:
+                            future_direction = "BUY"
+                        else:
+                            future_direction = "SELL"
+                        
+                        # Check if movement is now sufficient
+                        if abs(price_change) >= min_movement:
+                            self.stdout.write(self.style.SUCCESS(f"🎯 Sufficient movement detected! ₹{abs(price_change):.2f}"))
+                            self.stdout.write(self.style.SUCCESS(f"🚀 FUTURE Direction: {future_direction}"))
+                            self.stdout.write(self.style.SUCCESS("✅ Proceeding with trade entry..."))
+                            break
+                        else:
+                            # Log current status every 30 seconds
+                            if int(elapsed_minutes * 60) % 30 == 0:
+                                self.stdout.write(f"📊 Monitoring... Movement: ₹{abs(price_change):.2f} | Need: ₹{min_movement} | Time: {current_time.strftime('%H:%M:%S')}")
+                
+                time.sleep(5)  # Check every 5 seconds
+        else:
+            self.stdout.write(self.style.SUCCESS(f"✅ Sufficient movement detected: ₹{abs(price_change):.2f}"))
         
+        # 🎯 NEW: Relaxed percentage check for better trade opportunities
         if abs(price_change_percent) < min_percent:
-            self.stdout.write(self.style.WARNING(f"⚠️ Insufficient percentage movement: {abs(price_change_percent):.2f}% (need {min_percent}%)"))
-            self.stdout.write(self.style.WARNING("💡 Skipping trade - market too sideways"))
-            return
+            self.stdout.write(self.style.WARNING(f"⚠️ Low percentage movement: {abs(price_change_percent):.2f}% (need {min_percent}%)"))
+            self.stdout.write(self.style.SUCCESS("💡 Proceeding anyway - sufficient absolute movement detected"))
+            # Don't return - continue with the trade
         
         # Check if we're in a strong trend
         strong_trend = abs(price_change_percent) > 0.5  # Strong trend if > 0.5%
@@ -197,7 +247,7 @@ class Command(BaseCommand):
         self.stdout.write("-" * 30)
         
         # Only trade if we have a clear direction with sufficient movement
-        if abs(price_change) >= min_movement and abs(price_change_percent) >= min_percent:
+        if abs(price_change) >= min_movement:
             self.stdout.write(self.style.SUCCESS("✅ Market conditions favorable for trading"))
         else:
             self.stdout.write(self.style.ERROR("❌ Market conditions unfavorable - skipping trade"))
