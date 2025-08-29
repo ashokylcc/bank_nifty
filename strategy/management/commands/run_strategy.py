@@ -35,7 +35,7 @@ class Command(BaseCommand):
         current_time = now.time()
 
         # Check if we're within trading hours (9:15 AM to 9:45 AM)
-        if current_time < dt_time(9, 15) or current_time > dt_time(10, 45):
+        if current_time < dt_time(9, 15) or current_time > dt_time(14, 45):
             self.stdout.write(self.style.WARNING(f"⏰ Outside trading hours. Current time: {current_time.strftime('%H:%M:%S')} IST. Trading window: 09:15-09:45"))
             return
 
@@ -49,8 +49,8 @@ class Command(BaseCommand):
         LOT_SIZE = 35  # BankNifty lot size
         TARGET_PROFIT = 500  # Target profit per lot
         STOPLOSS = 1000       # Stoploss per lot
-        SQUARE_OFF_TIME = dt_time(10, 45)  # Exit at 9:45 AM
-        YESTERDAY_CLOSING = 54500  # Update this daily
+        SQUARE_OFF_TIME = dt_time(14, 45)  # Exit at 9:45 AM
+        YESTERDAY_CLOSING = 54300  # Update this daily
 
         self.stdout.write(self.style.SUCCESS("🚀 Bank Nifty Future-Based Option Strategy"))
         self.stdout.write("=" * 50)
@@ -87,7 +87,7 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS("✅ WebSocket connection established"))
 
         # 📊 Get Bank Nifty Future Symbol and LTP
-        future_symbol = "BANKNIFTY28AUG25F"  # Active future symbol
+        future_symbol = "BANKNIFTY30SEP25F"  # Active future symbol
         if not simulate and ltp_streamer:
             ltp_streamer.subscribe(future_symbol)
         
@@ -290,13 +290,13 @@ class Command(BaseCommand):
 
         if future_direction == "BUY":
             strike_price = base_strike
-            option_symbol = f"BANKNIFTY28AUG25C{strike_price}"
+            option_symbol = f"BANKNIFTY30SEP25C{strike_price}"
             option_direction = "BUY"
             self.stdout.write(self.style.SUCCESS(f"📞 FUTURE=BUY → BUY Call Option: {option_symbol}"))
             self.stdout.write(f"   💡 Strategy: Call Option (₹{strike_price}) for BUY signal")
         else:
             strike_price = base_strike
-            option_symbol = f"BANKNIFTY28AUG25P{strike_price}"
+            option_symbol = f"BANKNIFTY30SEP25P{strike_price}"
             option_direction = "BUY"
             self.stdout.write(self.style.SUCCESS(f"📞 FUTURE=SELL → BUY Put Option: {option_symbol}"))
             self.stdout.write(f"   💡 Strategy: Put Option (₹{strike_price}) for SELL signal")
