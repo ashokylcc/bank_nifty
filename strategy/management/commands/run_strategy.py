@@ -36,7 +36,7 @@ class Command(BaseCommand):
         current_time = now.time()
 
         # Check if we're within trading hours (9:15 AM to 9:45 AM)
-        if current_time < dt_time(9, 15) or current_time > dt_time(17, 45):  # Extended for testing
+        if current_time < dt_time(9, 15) or current_time > dt_time(9, 45):  # Extended for testing
             self.stdout.write(self.style.WARNING(f"⏰ Outside trading hours. Current time: {current_time.strftime('%H:%M:%S')} IST. Trading window: 09:15-16:30"))
             return
 
@@ -55,8 +55,8 @@ class Command(BaseCommand):
         LOT_SIZE = QUANTITY * 35  # Automatically calculate lot size based on quantity
         TARGET_PROFIT = 500 * QUANTITY  # Target profit per lot (dynamic)
         STOPLOSS = 1000 * QUANTITY      # Stoploss per lot (dynamic)
-        SQUARE_OFF_TIME = dt_time(17, 45)  # Exit at 9:45 AM
-        YESTERDAY_CLOSING = 54100  # Update this daily
+        SQUARE_OFF_TIME = dt_time(9, 45)  # Exit at 9:45 AM
+        YESTERDAY_CLOSING = 54400  # Update this daily
 
         self.stdout.write(self.style.SUCCESS("🚀 Bank Nifty Future-Based Option Strategy"))
         self.stdout.write("=" * 50)
@@ -355,6 +355,16 @@ class Command(BaseCommand):
         # 🛒 Place LIVE BUY order (Limit) for entry
         buy_order_id = None
         if not simulate and ltp_streamer:
+            # 🎯 NEW: Check market hours before placing order
+            current_time = datetime.now(ist).time()
+            market_start = dt_time(9, 15)  # Market opens at 9:15 AM
+            market_end = dt_time(15, 30)   # Market closes at 3:30 PM
+            
+            if current_time < market_start or current_time > market_end:
+                self.stdout.write(self.style.ERROR(f"❌ Market closed! Current time: {current_time.strftime('%H:%M:%S')} | Market hours: 09:15-15:30"))
+                self.stdout.write(self.style.WARNING("💡 Strategy will work during market hours only"))
+                return
+            
             try:
                 instrument = ltp_streamer.instrument_map.get(option_symbol)
                 if not instrument:
@@ -362,12 +372,12 @@ class Command(BaseCommand):
                 buy_order_id = ltp_streamer.alice.place_order(
                     transaction_type=TransactionType.Buy,
                     instrument=instrument,
-                    quantity=QUANTITY,  # Use the common QUANTITY parameter
+                    quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
                     order_type=OrderType.Limit,
                     product_type=ProductType.Intraday,
                     price=entry_price  # Buy at entry price (limit order)
                 )
-                self.stdout.write(self.style.SUCCESS(f"🛒 BUY order placed: {buy_order_id} | Price: ₹{entry_price} | Quantity: {QUANTITY} (35 lots)"))
+                self.stdout.write(self.style.SUCCESS(f"🛒 BUY order placed: {buy_order_id} | Price: ₹{entry_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f"❌ Failed to place BUY order: {e}"))
                 return
@@ -455,12 +465,12 @@ class Command(BaseCommand):
                         sell_order_id = ltp_streamer.alice.place_order(
                             transaction_type=TransactionType.Sell,
                             instrument=instrument,
-                            quantity=QUANTITY,  # Use the common QUANTITY parameter
+                            quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
                             order_type=OrderType.Limit,
                             product_type=ProductType.Intraday,
                             price=exit_price  # Sell at current LTP
                         )
-                        self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (time exit): {sell_order_id} | Price: ₹{exit_price} | Quantity: {QUANTITY} (35 lots)"))
+                        self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (time exit): {sell_order_id} | Price: ₹{exit_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
                     except Exception as e:
                         self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on time exit: {e}"))
                     break
@@ -485,12 +495,12 @@ class Command(BaseCommand):
                         sell_order_id = ltp_streamer.alice.place_order(
                             transaction_type=TransactionType.Sell,
                             instrument=instrument,
-                            quantity=QUANTITY,  # Use the common QUANTITY parameter
+                            quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
                             order_type=OrderType.Limit,
                             product_type=ProductType.Intraday,
                             price=exit_price  # Sell at current LTP
                         )
-                        self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (target): {sell_order_id} | Price: ₹{exit_price} | Quantity: {QUANTITY} (35 lots)"))
+                        self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (target): {sell_order_id} | Price: ₹{exit_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
                     except Exception as e:
                         self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on target: {e}"))
                     self.stdout.write(self.style.SUCCESS(f"🎯 Target Hit! PnL: ₹{pnl:.2f}"))
@@ -506,12 +516,12 @@ class Command(BaseCommand):
                         sell_order_id = ltp_streamer.alice.place_order(
                             transaction_type=TransactionType.Sell,
                             instrument=instrument,
-                            quantity=QUANTITY,  # Use the common QUANTITY parameter
+                            quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
                             order_type=OrderType.Limit,
                             product_type=ProductType.Intraday,
                             price=exit_price  # Sell at current LTP
                         )
-                        self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (stoploss): {sell_order_id} | Price: ₹{exit_price} | Quantity: {QUANTITY} (35 lots)"))
+                        self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (stoploss): {sell_order_id} | Price: ₹{exit_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
                     except Exception as e:
                         self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on stoploss: {e}"))
                     self.stdout.write(self.style.ERROR(f"🛑 Stoploss Hit! PnL: ₹{pnl:.2f}"))
