@@ -36,7 +36,7 @@ class Command(BaseCommand):
         current_time = now.time()
 
         # Check if we're within trading hours (9:15 AM to 9:45 AM)
-        if current_time < dt_time(9, 15) or current_time > dt_time(9, 45):  # Extended for testing
+        if current_time < dt_time(9, 15) or current_time > dt_time(11, 45):  # Extended for testing
             self.stdout.write(self.style.WARNING(f"⏰ Outside trading hours. Current time: {current_time.strftime('%H:%M:%S')} IST. Trading window: 09:15-16:30"))
             return
 
@@ -47,7 +47,7 @@ class Command(BaseCommand):
 
         # 🔧 Manual settings
         CAPITAL = 30000
-        QUANTITY = 1  # Common quantity parameter (1 quantity = 35 lot size for Bank Nifty)
+        QUANTITY = 2  # Common quantity parameter (1 quantity = 35 lot size for Bank Nifty)
         # Change QUANTITY for different scenarios:
         # QUANTITY = 1  # 1 quantity = 35 lots (₹17,500 capital needed)
         # QUANTITY = 2  # 2 quantity = 70 lots (₹35,000 capital needed)
@@ -55,8 +55,8 @@ class Command(BaseCommand):
         LOT_SIZE = QUANTITY * 35  # Automatically calculate lot size based on quantity
         TARGET_PROFIT = 500 * QUANTITY  # Target profit per lot (dynamic)
         STOPLOSS = 1000 * QUANTITY      # Stoploss per lot (dynamic)
-        SQUARE_OFF_TIME = dt_time(9, 45)  # Exit at 9:45 AM
-        YESTERDAY_CLOSING = 54400  # Update this daily
+        SQUARE_OFF_TIME = dt_time(11, 45)  # Exit at 9:45 AM
+        YESTERDAY_CLOSING = 54300  # Update this daily
 
         self.stdout.write(self.style.SUCCESS("🚀 Bank Nifty Future-Based Option Strategy"))
         self.stdout.write("=" * 50)
@@ -526,6 +526,58 @@ class Command(BaseCommand):
                         self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on stoploss: {e}"))
                     self.stdout.write(self.style.ERROR(f"🛑 Stoploss Hit! PnL: ₹{pnl:.2f}"))
                     break
+                
+                # 🎯 NEW: Smart Exit Strategy for Adverse Movement
+                elif pnl < -200:  # If loss exceeds ₹200 (₹200 * 35 lots = ₹7000)
+                    # Check if we should wait or exit quickly
+                    time_elapsed = (datetime.now(ist) - entry_time).seconds / 60  # minutes
+                    
+                    if time_elapsed < 5:  # Within first 5 minutes
+                        # Quick exit if price moves against us early
+                        status = "QUICK EXIT"
+                        exit_price = current_ltp
+                        self.stdout.write(self.style.WARNING(f"⚠️ Quick exit triggered - Price moved against position early"))
+                        self.stdout.write(self.style.WARNING(f"💡 Exiting to prevent larger loss"))
+                        
+                        try:
+                            instrument = ltp_streamer.instrument_map.get(option_symbol)
+                            if not instrument:
+                                instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                            sell_order_id = ltp_streamer.alice.place_order(
+                                transaction_type=TransactionType.Sell,
+                                instrument=instrument,
+                                quantity=LOT_SIZE,
+                                order_type=OrderType.Limit,
+                                product_type=ProductType.Intraday,
+                                price=exit_price
+                            )
+                            self.stdout.write(self.style.SUCCESS(f"✅ Quick exit SELL placed: {sell_order_id} | Price: ₹{exit_price} | Loss: ₹{abs(pnl):.2f}"))
+                        except Exception as e:
+                            self.stdout.write(self.style.ERROR(f"❌ Failed to quick exit: {e}"))
+                        break
+                    
+                    elif time_elapsed > 15:  # After 15 minutes, be more aggressive
+                        # If still in loss after 15 minutes, exit
+                        status = "TIMEOUT EXIT"
+                        exit_price = current_ltp
+                        self.stdout.write(self.style.WARNING(f"⚠️ Timeout exit - Still in loss after 15 minutes"))
+                        
+                        try:
+                            instrument = ltp_streamer.instrument_map.get(option_symbol)
+                            if not instrument:
+                                instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                            sell_order_id = ltp_streamer.alice.place_order(
+                                transaction_type=TransactionType.Sell,
+                                instrument=instrument,
+                                quantity=LOT_SIZE,
+                                order_type=OrderType.Limit,
+                                product_type=ProductType.Intraday,
+                                price=exit_price
+                            )
+                            self.stdout.write(self.style.SUCCESS(f"✅ Timeout exit SELL placed: {sell_order_id} | Price: ₹{exit_price} | Loss: ₹{abs(pnl):.2f}"))
+                        except Exception as e:
+                            self.stdout.write(self.style.ERROR(f"❌ Failed to timeout exit: {e}"))
+                        break
 
                 # Log current status every 30 seconds
                 elapsed = (datetime.now(ist) - entry_time).seconds
