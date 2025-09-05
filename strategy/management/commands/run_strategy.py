@@ -36,7 +36,7 @@ class Command(BaseCommand):
         current_time = now.time()
 
         # Check if we're within trading hours (9:15 AM to 9:45 AM) - Skip check in simulation mode
-        if not simulate and (current_time < dt_time(9, 15) or current_time > dt_time(12, 45)):  # Extended for testing
+        if not simulate and (current_time < dt_time(9, 15) or current_time > dt_time(15, 30)):  # Extended for testing
             self.stdout.write(self.style.WARNING(f"⏰ Outside trading hours. Current time: {current_time.strftime('%H:%M:%S')} IST. Trading window: 09:15-16:30"))
             return
 
@@ -47,15 +47,15 @@ class Command(BaseCommand):
 
         # 🔧 Manual settings
         CAPITAL = 30000
-        QUANTITY = 1  # Common quantity parameter (1 quantity = 35 lot size for Bank Nifty)
+        QUANTITY = 1  # Reduced quantity for margin testing (0.5 quantity = 17-18 lots)
         # Change QUANTITY for different scenarios:
         # QUANTITY = 1  # 1 quantity = 35 lots (₹17,500 capital needed)
         # QUANTITY = 2  # 2 quantity = 70 lots (₹35,000 capital needed)
         # QUANTITY = 3  # 3 quantity = 105 lots (₹52,500 capital needed)
-        LOT_SIZE = QUANTITY * 35  # Automatically calculate lot size based on quantity
+        LOT_SIZE = int(QUANTITY * 35)  # Automatically calculate lot size based on quantity (rounded to integer)
         TARGET_PROFIT = 500 * QUANTITY  # Target profit per lot (dynamic)
         STOPLOSS = 1000 * QUANTITY      # Stoploss per lot (dynamic)
-        SQUARE_OFF_TIME = dt_time(12, 45)  # Exit at 9:45 AM
+        SQUARE_OFF_TIME = dt_time(15, 30)  # Exit at 9:45 AM
         YESTERDAY_CLOSING = 54300  # Update this daily
 
         self.stdout.write(self.style.SUCCESS("🚀 Bank Nifty Future-Based Option Strategy"))
@@ -373,9 +373,9 @@ class Command(BaseCommand):
                     transaction_type=TransactionType.Buy,
                     instrument=instrument,
                     quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
-                    order_type=OrderType.Limit,
-                    product_type=ProductType.Intraday,
-                    price=entry_price  # Buy at entry price (limit order)
+                    order_type=OrderType.Market,
+                    product_type=ProductType.Intraday
+                    #price=entry_price  # Buy at entry price (limit order)
                 )
                 self.stdout.write(self.style.SUCCESS(f"🛒 BUY order placed: {buy_order_id} | Price: ₹{entry_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
             except Exception as e:
