@@ -83,6 +83,9 @@ class Command(BaseCommand):
         VOLUME_MULTIPLIER = 1.5  # 1.5x average volume for confirmation
         
         YESTERDAY_CLOSING = 54900  # Update this daily
+
+        FUTURE_SYMBOL = "BANKNIFTY30SEP25F"
+        OPTION_SYMBOL = "BANKNIFTY30SEP25"
         
         # 🎯 DAILY TRACKING VARIABLES
         daily_trade_count = 0
@@ -149,7 +152,7 @@ class Command(BaseCommand):
             self.stdout.write("🚀 ACTIVE MODE: Monitoring for entry opportunities...")
         
         # 📊 Get Bank Nifty Future Symbol and LTP
-        future_symbol = "BANKNIFTY30SEP25F"  # Active future symbol
+        future_symbol = FUTURE_SYMBOL  # Active future symbol
         if not simulate and ltp_streamer:
             ltp_streamer.subscribe(future_symbol)
         
@@ -272,16 +275,16 @@ class Command(BaseCommand):
         
         if future_direction == "BUY":
             option_type = "CE"  # Call Option
-            option_symbol = "BANKNIFTY30SEP25C54900"
+            option_symbol = OPTION_SYMBOL + "C" + str(YESTERDAY_CLOSING)
             self.stdout.write(f"📞 FUTURE={future_direction} → BUY Call Option: {option_symbol}")
         else:
             option_type = "PE"  # Put Option
-            option_symbol = "BANKNIFTY30SEP25P54900"
+            option_symbol = OPTION_SYMBOL + "P" + str(YESTERDAY_CLOSING)
             self.stdout.write(f"📞 FUTURE={future_direction} → BUY Put Option: {option_symbol}")
         
         self.stdout.write(f"   💡 Strategy: {option_type} Option (₹54900) for {future_direction} signal")
         self.stdout.write(f"🎯 Yesterday's Closing: ₹{YESTERDAY_CLOSING}")
-        self.stdout.write(f"🎯 Selected Strike: ₹54900")
+        self.stdout.write(f"🎯 Selected Strike: ₹{YESTERDAY_CLOSING}")
         
         # 🎯 Step: Advanced Risk Management
         self.stdout.write("\n🛡️ Step: Advanced Risk Management")
@@ -566,7 +569,7 @@ class Command(BaseCommand):
         self.stdout.write("\n" + "=" * 50)
         self.stdout.write("📋 TRADE SUMMARY")
         self.stdout.write("=" * 50)
-        self.stdout.write(f"Future Symbol: BANKNIFTY30SEP25F")
+        self.stdout.write(f"Future Symbol: {FUTURE_SYMBOL}")
         self.stdout.write(f"Future LTP: ₹{future_ltp}")
         self.stdout.write(f"Future Direction: {future_direction}")
         self.stdout.write(f"Yesterday's Closing: ₹{YESTERDAY_CLOSING}")
@@ -597,7 +600,7 @@ class Command(BaseCommand):
             self.stdout.write("🔄 Continuing to monitor for next signal...")
             # Recursive call to continue monitoring (but with updated daily tracking)
             # We need to pass the updated daily_trade_count and daily_pnl
-            self.continue_monitoring(ltp_streamer, YESTERDAY_CLOSING, simulate, daily_trade_count, daily_pnl)
+            self.continue_monitoring(ltp_streamer, YESTERDAY_CLOSING, simulate, daily_trade_count, daily_pnl, FUTURE_SYMBOL)
         
         # Cleanup
         if not simulate and ltp_streamer:
@@ -621,7 +624,7 @@ class Command(BaseCommand):
         # This is a placeholder for the actual monitoring implementation
         self.stdout.write("👀 Real-time monitoring would be implemented here")
     
-    def continue_monitoring(self, ltp_streamer, yesterday_closing, simulate, daily_trade_count, daily_pnl):
+    def continue_monitoring(self, ltp_streamer, yesterday_closing, simulate, daily_trade_count, daily_pnl, future_symbol):
         """Continue monitoring for next trading signal after a trade is completed"""
         self.stdout.write("\n🔄 CONTINUOUS MONITORING - Looking for Next Signal")
         self.stdout.write("=" * 50)
@@ -646,11 +649,11 @@ class Command(BaseCommand):
         
         # Get fresh LTP for next signal
         if not simulate and ltp_streamer:
-            future_ltp = ltp_streamer.get_ltp("BANKNIFTY30SEP25F")
+            future_ltp = ltp_streamer.get_ltp(future_symbol)
             if not future_ltp:
                 self.stdout.write("❌ Unable to get fresh LTP - retrying...")
                 time.sleep(2)
-                future_ltp = ltp_streamer.get_ltp("BANKNIFTY30SEP25F")
+                future_ltp = ltp_streamer.get_ltp(future_symbol)
         else:
             # Simulation mode - generate new movement
             import random
@@ -688,7 +691,7 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("❌ INSUFFICIENT MOVEMENT - Waiting for stronger signal"))
             # Wait and check again
             time.sleep(10)
-            self.continue_monitoring(ltp_streamer, yesterday_closing, simulate, daily_trade_count, daily_pnl)
+            self.continue_monitoring(ltp_streamer, yesterday_closing, simulate, daily_trade_count, daily_pnl, future_symbol)
             return
         
         # If we have a valid signal, execute the trade
