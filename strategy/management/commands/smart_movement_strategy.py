@@ -17,9 +17,9 @@ Key Features:
 import os
 import sys
 import django
+import time
 from datetime import datetime, time as dt_time
 import pytz
-import time
 
 # Add the project directory to Python path
 sys.path.append('/var/www/html/bank_nifty')
@@ -45,18 +45,18 @@ class Command(BaseCommand):
         
         # 🔧 SMART MOVEMENT STRATEGY SETTINGS
         CAPITAL = 30000
-        QUANTITY = 1  # 1 quantity = 35 lots
-        LOT_SIZE = int(QUANTITY * 35)  # 35 lots per quantity
+        QUANTITY = 1  # 1 quantity (Alice Blue requirement)
+        LOT_SIZE = 35  # Alice Blue default lot size (cannot be changed)
         
-        # 🎯 DYNAMIC PROFIT TARGETS (based on movement strength)
-        TARGET_PROFIT_STRONG = 1200 * QUANTITY   # ₹1,200 for strong movement (2%+)
-        TARGET_PROFIT_MODERATE = 800 * QUANTITY  # ₹800 for moderate movement (1%+)
-        TARGET_PROFIT_WEAK = 500 * QUANTITY      # ₹500 for weak movement (0.5%+)
+        # 🎯 DYNAMIC PROFIT TARGETS (based on movement strength) - CONSERVATIVE TARGETS
+        TARGET_PROFIT_STRONG = 800   # ₹800 for strong movement (2%+) - CONSERVATIVE
+        TARGET_PROFIT_MODERATE = 500  # ₹500 for moderate movement (1%+) - CONSERVATIVE
+        TARGET_PROFIT_WEAK = 300      # ₹300 for weak movement (0.5%+) - CONSERVATIVE
         
-        # 🎯 DYNAMIC STOPLOSS (based on movement strength)
-        STOPLOSS_STRONG = 200 * QUANTITY    # ₹200 for strong movement
-        STOPLOSS_MODERATE = 300 * QUANTITY  # ₹300 for moderate movement
-        STOPLOSS_WEAK = 400 * QUANTITY      # ₹400 for weak movement
+        # 🎯 DYNAMIC STOPLOSS (based on movement strength) - CONSERVATIVE STOPLOSS
+        STOPLOSS_STRONG = 200    # ₹200 for strong movement - CONSERVATIVE
+        STOPLOSS_MODERATE = 300  # ₹300 for moderate movement - CONSERVATIVE
+        STOPLOSS_WEAK = 400      # ₹400 for weak movement - CONSERVATIVE
         
         # 🎯 MOVEMENT THRESHOLDS
         STRONG_MOVEMENT_POINTS = 100  # 100+ points
@@ -73,16 +73,16 @@ class Command(BaseCommand):
         OPTIMAL_ENTRY_END = dt_time(12, 0)    # 12:00 PM - Best entry window
         SQUARE_OFF_TIME = dt_time(13, 0)      # 1:00 PM - Square off time
         
-        # 🎯 RISK MANAGEMENT
-        MAX_DAILY_LOSS = 1000 * QUANTITY  # Max daily loss
+        # 🎯 RISK MANAGEMENT - CONSERVATIVE LIMITS
+        MAX_DAILY_LOSS = 800  # Max daily loss - CONSERVATIVE
         MAX_TRADES_PER_DAY = 3  # Max trades per day
-        PROFIT_TARGET_DAILY = 800 * QUANTITY  # Daily profit target
+        PROFIT_TARGET_DAILY = 500  # Daily profit target - CONSERVATIVE
         
         # 🎯 MOMENTUM CONFIRMATION
         MOMENTUM_CANDLES = 3  # 3 consecutive higher highs for confirmation
         VOLUME_MULTIPLIER = 1.5  # 1.5x average volume for confirmation
         
-        YESTERDAY_CLOSING = 54900  # Update this daily
+        YESTERDAY_CLOSING = 55000  # Update this daily
 
         FUTURE_SYMBOL = "BANKNIFTY30SEP25F"
         OPTION_SYMBOL = "BANKNIFTY30SEP25"
@@ -630,11 +630,11 @@ class Command(BaseCommand):
         self.stdout.write("=" * 50)
         
         # Import the same parameters from the main method
-        QUANTITY = 1
-        LOT_SIZE = int(QUANTITY * 35)
+        QUANTITY = 1  # Alice Blue requirement
+        LOT_SIZE = 35  # Alice Blue default
         MAX_TRADES_PER_DAY = 3
-        MAX_DAILY_LOSS = 1000 * QUANTITY
-        PROFIT_TARGET_DAILY = 800 * QUANTITY
+        MAX_DAILY_LOSS = 800  # CONSERVATIVE
+        PROFIT_TARGET_DAILY = 500  # CONSERVATIVE
         
         # Check if we should continue
         if daily_trade_count >= MAX_TRADES_PER_DAY:
@@ -683,10 +683,13 @@ class Command(BaseCommand):
         
         if abs(price_change) >= STRONG_MOVEMENT_POINTS and abs(price_change_percent) >= STRONG_MOVEMENT_PERCENT:
             self.stdout.write(self.style.SUCCESS("🔥 STRONG SIGNAL DETECTED - Ready for next trade!"))
+            movement_strength = "STRONG"
         elif abs(price_change) >= MODERATE_MOVEMENT_POINTS and abs(price_change_percent) >= MODERATE_MOVEMENT_PERCENT:
             self.stdout.write(self.style.SUCCESS("⚡ MODERATE SIGNAL DETECTED - Ready for next trade!"))
+            movement_strength = "MODERATE"
         elif abs(price_change) >= WEAK_MOVEMENT_POINTS and abs(price_change_percent) >= WEAK_MOVEMENT_PERCENT:
             self.stdout.write(self.style.SUCCESS("⚠️ WEAK SIGNAL DETECTED - Ready for next trade!"))
+            movement_strength = "WEAK"
         else:
             self.stdout.write(self.style.WARNING("❌ INSUFFICIENT MOVEMENT - Waiting for stronger signal"))
             # Wait and check again
@@ -694,7 +697,272 @@ class Command(BaseCommand):
             self.continue_monitoring(ltp_streamer, yesterday_closing, simulate, daily_trade_count, daily_pnl, future_symbol)
             return
         
-        # If we have a valid signal, execute the trade
+        # Execute the next trade with updated daily tracking
         self.stdout.write("🚀 Executing next trade with updated daily tracking...")
-        # Note: We would need to modify the main handle method to accept daily tracking parameters
-        # For now, this demonstrates the continuous monitoring concept
+        self.execute_next_trade(ltp_streamer, yesterday_closing, simulate, daily_trade_count, daily_pnl, future_symbol, future_ltp, movement_strength)
+    
+    def execute_next_trade(self, ltp_streamer, yesterday_closing, simulate, daily_trade_count, daily_pnl, future_symbol, future_ltp, movement_strength):
+        """Execute the next trade with updated daily tracking"""
+        # Import required modules
+        from datetime import datetime, time as dt_time
+        import pytz
+        from alice_blue import TransactionType, OrderType, ProductType
+        
+        # Parameters
+        QUANTITY = 1  # Alice Blue requirement
+        LOT_SIZE = 35  # Alice Blue default
+        MAX_TRADES_PER_DAY = 3
+        MAX_DAILY_LOSS = 800  # CONSERVATIVE
+        PROFIT_TARGET_DAILY = 500  # CONSERVATIVE
+        
+        # Update daily trade count
+        daily_trade_count += 1
+        
+        self.stdout.write(f"\n🎯 TRADE #{daily_trade_count} - {movement_strength} SIGNAL")
+        self.stdout.write("=" * 50)
+        
+        # Determine future direction
+        price_change = future_ltp - yesterday_closing
+        future_direction = "BUY" if price_change > 0 else "SELL"
+        
+        self.stdout.write(f"📊 Future Movement: ₹{price_change:.2f}")
+        self.stdout.write(f"🎯 Future Direction: {future_direction}")
+        
+        # Select option based on future direction
+        if future_direction == "BUY":
+            option_symbol = f"BANKNIFTY30SEP25C{int(yesterday_closing)}"
+            option_direction = "BUY"
+            self.stdout.write(f"📞 FUTURE=BUY → BUY Call Option: {option_symbol}")
+        else:
+            option_symbol = f"BANKNIFTY30SEP25P{int(yesterday_closing)}"
+            option_direction = "BUY"
+            self.stdout.write(f"📞 FUTURE=SELL → BUY Put Option: {option_symbol}")
+        
+        # Dynamic risk management based on movement strength - CONSERVATIVE TARGETS
+        if movement_strength == "STRONG":
+            TARGET_PROFIT = 800  # CONSERVATIVE
+            STOPLOSS = 200  # CONSERVATIVE
+        elif movement_strength == "MODERATE":
+            TARGET_PROFIT = 500  # CONSERVATIVE
+            STOPLOSS = 300  # CONSERVATIVE
+        else:  # WEAK
+            TARGET_PROFIT = 300  # CONSERVATIVE
+            STOPLOSS = 400  # CONSERVATIVE
+        
+        self.stdout.write(f"🎯 Movement Strength: {movement_strength}")
+        self.stdout.write(f"🎯 Dynamic Target: ₹{TARGET_PROFIT}")
+        self.stdout.write(f"🎯 Dynamic Stoploss: ₹{STOPLOSS}")
+        
+        # Subscribe to option
+        if not simulate and ltp_streamer:
+            ltp_streamer.subscribe(option_symbol)
+            entry_price = ltp_streamer.get_ltp(option_symbol)
+        else:
+            # Simulation mode
+            import random
+            entry_price = random.uniform(400, 600)
+        
+        if not entry_price:
+            self.stdout.write(f"❌ Unable to get entry price for {option_symbol}")
+            return
+        
+        self.stdout.write(f"💰 Entry Price: ₹{entry_price}")
+        
+        # Place BUY order
+        buy_order_id = None
+        if not simulate and ltp_streamer:
+            try:
+                instrument = ltp_streamer.instrument_map.get(option_symbol)
+                if not instrument:
+                    instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                
+                buy_order_id = ltp_streamer.alice.place_order(
+                    transaction_type=TransactionType.Buy,
+                    instrument=instrument,
+                    quantity=LOT_SIZE,
+                    order_type=OrderType.Market,
+                    product_type=ProductType.Intraday
+                )
+                self.stdout.write(f"🛒 BUY order placed: {buy_order_id} | Price: ₹{entry_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)")
+            except Exception as e:
+                self.stdout.write(f"❌ Failed to place BUY order: {e}")
+                return
+        
+        # Monitor position with trailing stoploss
+        self.stdout.write("🔄 Starting position monitoring with trailing stoploss...")
+        self.monitor_position_with_trailing_stoploss(ltp_streamer, option_symbol, entry_price, TARGET_PROFIT, STOPLOSS, simulate, daily_trade_count, daily_pnl, future_symbol, yesterday_closing)
+    
+    def monitor_position_with_trailing_stoploss(self, ltp_streamer, option_symbol, entry_price, TARGET_PROFIT, STOPLOSS, simulate, daily_trade_count, daily_pnl, future_symbol, yesterday_closing):
+        """Monitor position with trailing stoploss and continue to next trade"""
+        from datetime import datetime, time as dt_time
+        import pytz
+        from alice_blue import TransactionType, OrderType, ProductType
+        
+        QUANTITY = 1  # Alice Blue requirement
+        LOT_SIZE = 35  # Alice Blue default
+        SQUARE_OFF_TIME = dt_time(9, 45)
+        
+        ist = pytz.timezone('Asia/Kolkata')
+        start_time = datetime.now(ist)
+        trailing_sl = STOPLOSS
+        max_profit = 0
+        
+        self.stdout.write("🔄 Live monitoring with trailing stoploss...")
+        
+        while True:
+            current_time = datetime.now(ist).time()
+            
+            # Check square off time
+            if current_time >= SQUARE_OFF_TIME:
+                self.stdout.write(f"⏰ Square off time reached: {current_time.strftime('%H:%M:%S')}")
+                if not simulate and ltp_streamer:
+                    try:
+                        instrument = ltp_streamer.instrument_map.get(option_symbol)
+                        if not instrument:
+                            instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                        
+                        exit_price = ltp_streamer.get_ltp(option_symbol)
+                        sell_order_id = ltp_streamer.alice.place_order(
+                            transaction_type=TransactionType.Sell,
+                            instrument=instrument,
+                            quantity=LOT_SIZE,
+                            order_type=OrderType.Market,
+                            product_type=ProductType.Intraday
+                        )
+                        self.stdout.write(f"🛒 SELL order placed: {sell_order_id} | Price: ₹{exit_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)")
+                    except Exception as e:
+                        self.stdout.write(f"❌ Failed to place SELL order: {e}")
+                        exit_price = entry_price  # Fallback
+                else:
+                    # Simulation mode
+                    import random
+                    exit_price = random.uniform(entry_price * 0.8, entry_price * 1.2)
+                
+                pnl = (exit_price - entry_price) * LOT_SIZE
+                daily_pnl += pnl
+                
+                self.stdout.write(f"📊 Time Exit PnL: ₹{pnl:.2f}")
+                self.stdout.write(f"📊 Daily PnL Update: ₹{daily_pnl:.2f}")
+                break
+            
+            # Get current LTP
+            if not simulate and ltp_streamer:
+                current_ltp = ltp_streamer.get_ltp(option_symbol)
+            else:
+                # Simulation mode - generate random movement
+                import random
+                movement_factor = random.uniform(0.8, 1.2)
+                current_ltp = entry_price * movement_factor
+            
+            if not current_ltp:
+                time.sleep(1)
+                continue
+            
+            # Calculate current PnL
+            current_pnl = (current_ltp - entry_price) * LOT_SIZE
+            
+            # Update trailing stoploss
+            if current_pnl > max_profit:
+                max_profit = current_pnl
+                trailing_sl = max(STOPLOSS, max_profit * 0.5)  # Trail at 50% of max profit
+            
+            # Check exit conditions
+            if current_pnl >= TARGET_PROFIT:
+                self.stdout.write(f"🎯 Target hit! PnL: ₹{current_pnl:.2f}")
+                if not simulate and ltp_streamer:
+                    try:
+                        instrument = ltp_streamer.instrument_map.get(option_symbol)
+                        if not instrument:
+                            instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                        
+                        sell_order_id = ltp_streamer.alice.place_order(
+                            transaction_type=TransactionType.Sell,
+                            instrument=instrument,
+                            quantity=LOT_SIZE,
+                            order_type=OrderType.Market,
+                            product_type=ProductType.Intraday
+                        )
+                        self.stdout.write(f"🛒 SELL order placed: {sell_order_id} | Price: ₹{current_ltp} | Quantity: {QUANTITY} ({LOT_SIZE} lots)")
+                    except Exception as e:
+                        self.stdout.write(f"❌ Failed to place SELL order: {e}")
+                
+                daily_pnl += current_pnl
+                self.stdout.write(f"📊 Target Hit PnL: ₹{current_pnl:.2f}")
+                self.stdout.write(f"📊 Daily PnL Update: ₹{daily_pnl:.2f}")
+                break
+                
+            elif current_pnl <= -trailing_sl:
+                self.stdout.write(f"🛑 Trailing Stoploss Hit! PnL: ₹{current_pnl:.2f}")
+                if not simulate and ltp_streamer:
+                    try:
+                        instrument = ltp_streamer.instrument_map.get(option_symbol)
+                        if not instrument:
+                            instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                        
+                        sell_order_id = ltp_streamer.alice.place_order(
+                            transaction_type=TransactionType.Sell,
+                            instrument=instrument,
+                            quantity=LOT_SIZE,
+                            order_type=OrderType.Market,
+                            product_type=ProductType.Intraday
+                        )
+                        self.stdout.write(f"🛒 SELL order placed: {sell_order_id} | Price: ₹{current_ltp} | Quantity: {QUANTITY} ({LOT_SIZE} lots)")
+                    except Exception as e:
+                        self.stdout.write(f"❌ Failed to place SELL order: {e}")
+                
+                daily_pnl += current_pnl
+                self.stdout.write(f"📊 Stoploss Hit PnL: ₹{current_pnl:.2f}")
+                self.stdout.write(f"📊 Daily PnL Update: ₹{daily_pnl:.2f}")
+                break
+            
+            # Log current status
+            if int((datetime.now(ist) - start_time).total_seconds()) % 30 == 0:  # Log every 30 seconds
+                self.stdout.write(f"📊 Current PnL: ₹{current_pnl:.2f} | LTP: ₹{current_ltp} | Trailing SL: ₹{trailing_sl:.2f} | Time: {current_time.strftime('%H:%M:%S')}")
+            
+            time.sleep(1)
+        
+        # Save trade log
+        self.stdout.write("\n📝 Step: Save Trade Log")
+        self.stdout.write("-" * 30)
+        
+        try:
+            from strategy.models import TradeLog
+            TradeLog.objects.create(
+                strategy="Smart Movement Strategy",
+                option_symbol=option_symbol,
+                direction="BUY",
+                strike_price=int(yesterday_closing),
+                entry_price=entry_price,
+                exit_price=current_ltp if 'current_ltp' in locals() else entry_price,
+                pnl=current_pnl,
+                status="COMPLETED",
+                message=f"Trade completed with {movement_strength} signal"
+            )
+            self.stdout.write("✅ Trade log saved successfully")
+        except Exception as e:
+            self.stdout.write(f"❌ Failed to save trade log: {e}")
+        
+        # Update daily tracking
+        self.stdout.write(f"📊 Daily Update: Trade {daily_trade_count}/3 | Daily PnL: ₹{daily_pnl:.2f}")
+        
+        # Check if we should continue trading
+        MAX_TRADES_PER_DAY = 3
+        MAX_DAILY_LOSS = 800  # CONSERVATIVE
+        PROFIT_TARGET_DAILY = 500  # CONSERVATIVE
+        
+        if daily_trade_count >= MAX_TRADES_PER_DAY:
+            self.stdout.write(self.style.ERROR(f"🛑 MAXIMUM TRADES REACHED: {daily_trade_count}/{MAX_TRADES_PER_DAY}"))
+            return
+        elif daily_pnl <= -MAX_DAILY_LOSS:
+            self.stdout.write(self.style.ERROR(f"🛑 MAXIMUM DAILY LOSS REACHED: ₹{daily_pnl:.2f}"))
+            return
+        elif daily_pnl >= PROFIT_TARGET_DAILY:
+            self.stdout.write(self.style.SUCCESS(f"🎯 DAILY PROFIT TARGET REACHED: ₹{daily_pnl:.2f}"))
+            return
+        
+        self.stdout.write(f"✅ Ready for next trade - {MAX_TRADES_PER_DAY - daily_trade_count} trades remaining")
+        
+        # Continue monitoring for next signal
+        self.stdout.write("\n🔄 Continuing to monitor for next signal...")
+        time.sleep(5)  # Brief pause before next trade
+        self.continue_monitoring(ltp_streamer, yesterday_closing, simulate, daily_trade_count, daily_pnl, future_symbol)

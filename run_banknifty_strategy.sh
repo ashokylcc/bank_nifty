@@ -11,6 +11,10 @@ case "$1" in
         echo "💰 Running Strategy in Profit-Only Mode..."
         python3 manage.py run_strategy --profit-only
         ;;
+    "watch")
+        echo "👀 Running Strategy in Continuous Monitoring Mode..."
+        python3 manage.py run_strategy --watch
+        ;;
     "simulate")
         echo "🎮 Running Strategy in Simulation Mode..."
         python3 manage.py run_strategy --simulate
@@ -52,6 +56,7 @@ case "$1" in
         echo "Commands:"
         echo "  run      - Run live strategy (9:15 AM - 1:15 PM)"
         echo "  profit   - Run strategy in profit-only mode (high-probability trades)"
+        echo "  watch    - Run strategy with continuous monitoring (wait for strong signals)"
         echo "  simulate - Run strategy in simulation mode"
         echo "  force-simulate - Force simulation mode (when WebSocket fails)"
         echo "  test     - Test connection and configuration"
@@ -64,6 +69,7 @@ case "$1" in
         echo "Examples:"
         echo "  $0 run      # Live trading"
         echo "  $0 profit   # Profit-only mode"
+        echo "  $0 watch    # Continuous monitoring"
         echo "  $0 simulate # Test mode"
         echo "  $0 force-simulate # When WebSocket fails"
         echo "  $0 status   # Check status"
