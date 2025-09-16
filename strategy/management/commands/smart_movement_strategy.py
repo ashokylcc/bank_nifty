@@ -82,7 +82,7 @@ class Command(BaseCommand):
         MOMENTUM_CANDLES = 3  # 3 consecutive higher highs for confirmation
         VOLUME_MULTIPLIER = 1.5  # 1.5x average volume for confirmation
         
-        YESTERDAY_CLOSING = 55000  # Update this daily
+        YESTERDAY_CLOSING = 55100  # Update this daily
 
         FUTURE_SYMBOL = "BANKNIFTY30SEP25F"
         OPTION_SYMBOL = "BANKNIFTY30SEP25"
@@ -790,9 +790,9 @@ class Command(BaseCommand):
         
         # Monitor position with trailing stoploss
         self.stdout.write("🔄 Starting position monitoring with trailing stoploss...")
-        self.monitor_position_with_trailing_stoploss(ltp_streamer, option_symbol, entry_price, TARGET_PROFIT, STOPLOSS, simulate, daily_trade_count, daily_pnl, future_symbol, yesterday_closing)
+        self.monitor_position_with_trailing_stoploss(ltp_streamer, option_symbol, entry_price, TARGET_PROFIT, STOPLOSS, simulate, daily_trade_count, daily_pnl, future_symbol, yesterday_closing, movement_strength)
     
-    def monitor_position_with_trailing_stoploss(self, ltp_streamer, option_symbol, entry_price, TARGET_PROFIT, STOPLOSS, simulate, daily_trade_count, daily_pnl, future_symbol, yesterday_closing):
+    def monitor_position_with_trailing_stoploss(self, ltp_streamer, option_symbol, entry_price, TARGET_PROFIT, STOPLOSS, simulate, daily_trade_count, daily_pnl, future_symbol, yesterday_closing, movement_strength):
         """Monitor position with trailing stoploss and continue to next trade"""
         from datetime import datetime, time as dt_time
         import pytz
@@ -838,10 +838,10 @@ class Command(BaseCommand):
                     import random
                     exit_price = random.uniform(entry_price * 0.8, entry_price * 1.2)
                 
-                pnl = (exit_price - entry_price) * LOT_SIZE
-                daily_pnl += pnl
+                current_pnl = (exit_price - entry_price) * LOT_SIZE
+                daily_pnl += current_pnl
                 
-                self.stdout.write(f"📊 Time Exit PnL: ₹{pnl:.2f}")
+                self.stdout.write(f"📊 Time Exit PnL: ₹{current_pnl:.2f}")
                 self.stdout.write(f"📊 Daily PnL Update: ₹{daily_pnl:.2f}")
                 break
             
@@ -926,9 +926,24 @@ class Command(BaseCommand):
         self.stdout.write("-" * 30)
         
         try:
-            from strategy.models import TradeLog
+            from strategy.models import TradeLog, TradeConfig
+            
+            # Get or create config for logging
+            config = TradeConfig.objects.filter(is_active=True).last()
+            if not config:
+                config = TradeConfig.objects.create(
+                    strategy_name="Smart Movement Strategy",
+                    closing_price=yesterday_closing,
+                    lot_size=LOT_SIZE,
+                    target=TARGET_PROFIT,
+                    stoploss=STOPLOSS,
+                    trade_start=dt_time(9, 15),
+                    trade_end=dt_time(15, 30),
+                    is_active=True
+                )
+            
             TradeLog.objects.create(
-                strategy="Smart Movement Strategy",
+                strategy=config,
                 option_symbol=option_symbol,
                 direction="BUY",
                 strike_price=int(yesterday_closing),
