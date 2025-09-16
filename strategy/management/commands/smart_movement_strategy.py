@@ -45,18 +45,28 @@ class Command(BaseCommand):
         
         # 🔧 SMART MOVEMENT STRATEGY SETTINGS
         CAPITAL = 30000
-        QUANTITY = 1  # 1 quantity (Alice Blue requirement)
+        QUANTITY = 1  # Change this to scale all targets dynamically (1, 2, 3, etc.)
         LOT_SIZE = 35  # Alice Blue default lot size (cannot be changed)
         
-        # 🎯 DYNAMIC PROFIT TARGETS (based on movement strength) - CONSERVATIVE TARGETS
-        TARGET_PROFIT_STRONG = 800   # ₹800 for strong movement (2%+) - CONSERVATIVE
-        TARGET_PROFIT_MODERATE = 500  # ₹500 for moderate movement (1%+) - CONSERVATIVE
-        TARGET_PROFIT_WEAK = 300      # ₹300 for weak movement (0.5%+) - CONSERVATIVE
+        # 🎯 BASE PROFIT TARGETS (per quantity) - CONSERVATIVE TARGETS
+        BASE_TARGET_PROFIT_STRONG = 800   # ₹800 per quantity for strong movement (2%+)
+        BASE_TARGET_PROFIT_MODERATE = 500  # ₹500 per quantity for moderate movement (1%+)
+        BASE_TARGET_PROFIT_WEAK = 300      # ₹300 per quantity for weak movement (0.5%+)
         
-        # 🎯 DYNAMIC STOPLOSS (based on movement strength) - CONSERVATIVE STOPLOSS
-        STOPLOSS_STRONG = 200    # ₹200 for strong movement - CONSERVATIVE
-        STOPLOSS_MODERATE = 300  # ₹300 for moderate movement - CONSERVATIVE
-        STOPLOSS_WEAK = 400      # ₹400 for weak movement - CONSERVATIVE
+        # 🎯 BASE STOPLOSS (per quantity) - CONSERVATIVE STOPLOSS
+        BASE_STOPLOSS_STRONG = 200    # ₹200 per quantity for strong movement
+        BASE_STOPLOSS_MODERATE = 300  # ₹300 per quantity for moderate movement
+        BASE_STOPLOSS_WEAK = 400      # ₹400 per quantity for weak movement
+        
+        # 🎯 DYNAMIC PROFIT TARGETS (scaled by quantity)
+        TARGET_PROFIT_STRONG = BASE_TARGET_PROFIT_STRONG * QUANTITY
+        TARGET_PROFIT_MODERATE = BASE_TARGET_PROFIT_MODERATE * QUANTITY
+        TARGET_PROFIT_WEAK = BASE_TARGET_PROFIT_WEAK * QUANTITY
+        
+        # 🎯 DYNAMIC STOPLOSS (scaled by quantity)
+        STOPLOSS_STRONG = BASE_STOPLOSS_STRONG * QUANTITY
+        STOPLOSS_MODERATE = BASE_STOPLOSS_MODERATE * QUANTITY
+        STOPLOSS_WEAK = BASE_STOPLOSS_WEAK * QUANTITY
         
         # 🎯 MOVEMENT THRESHOLDS
         STRONG_MOVEMENT_POINTS = 100  # 100+ points
@@ -73,14 +83,15 @@ class Command(BaseCommand):
         OPTIMAL_ENTRY_END = dt_time(12, 0)    # 12:00 PM - Best entry window
         SQUARE_OFF_TIME = dt_time(13, 0)      # 1:00 PM - Square off time
         
-        # 🎯 RISK MANAGEMENT - CONSERVATIVE LIMITS
-        MAX_DAILY_LOSS = 800  # Max daily loss - CONSERVATIVE
-        MAX_TRADES_PER_DAY = 3  # Max trades per day
-        PROFIT_TARGET_DAILY = 500  # Daily profit target - CONSERVATIVE
+        # 🎯 RISK MANAGEMENT - DYNAMIC LIMITS (scaled by quantity)
+        BASE_MAX_DAILY_LOSS = 800  # Base max daily loss per quantity
+        BASE_PROFIT_TARGET_DAILY = 500  # Base daily profit target per quantity
+        MAX_TRADES_PER_DAY = 3  # Max trades per day (fixed)
         
-        # 🎯 MOMENTUM CONFIRMATION
-        MOMENTUM_CANDLES = 3  # 3 consecutive higher highs for confirmation
-        VOLUME_MULTIPLIER = 1.5  # 1.5x average volume for confirmation
+        # Dynamic limits scaled by quantity
+        MAX_DAILY_LOSS = BASE_MAX_DAILY_LOSS * QUANTITY
+        PROFIT_TARGET_DAILY = BASE_PROFIT_TARGET_DAILY * QUANTITY
+        
         
         YESTERDAY_CLOSING = 55100  # Update this daily
 
@@ -103,6 +114,10 @@ class Command(BaseCommand):
         self.stdout.write(f"📦 Quantity: {QUANTITY} | Lot Size: {LOT_SIZE} | Capital: ₹{CAPITAL}")
         self.stdout.write(f"⏰ Optimal Entry Window: {OPTIMAL_ENTRY_START.strftime('%H:%M')} - {OPTIMAL_ENTRY_END.strftime('%H:%M')}")
         self.stdout.write(f"🛡️ Max Daily Loss: ₹{MAX_DAILY_LOSS} | Max Trades: {MAX_TRADES_PER_DAY}")
+        self.stdout.write(f"🎯 DYNAMIC SCALING: All targets × {QUANTITY}")
+        self.stdout.write(f"   • Strong: ₹{TARGET_PROFIT_STRONG} target, ₹{STOPLOSS_STRONG} stoploss")
+        self.stdout.write(f"   • Moderate: ₹{TARGET_PROFIT_MODERATE} target, ₹{STOPLOSS_MODERATE} stoploss")
+        self.stdout.write(f"   • Weak: ₹{TARGET_PROFIT_WEAK} target, ₹{STOPLOSS_WEAK} stoploss")
         
         if simulate:
             self.stdout.write(self.style.WARNING("🎮 SIMULATION MODE: No real trading"))
@@ -633,8 +648,12 @@ class Command(BaseCommand):
         QUANTITY = 1  # Alice Blue requirement
         LOT_SIZE = 35  # Alice Blue default
         MAX_TRADES_PER_DAY = 3
-        MAX_DAILY_LOSS = 800  # CONSERVATIVE
-        PROFIT_TARGET_DAILY = 500  # CONSERVATIVE
+        
+        # Dynamic limits scaled by quantity
+        BASE_MAX_DAILY_LOSS = 800  # Base max daily loss per quantity
+        BASE_PROFIT_TARGET_DAILY = 500  # Base daily profit target per quantity
+        MAX_DAILY_LOSS = BASE_MAX_DAILY_LOSS * QUANTITY
+        PROFIT_TARGET_DAILY = BASE_PROFIT_TARGET_DAILY * QUANTITY
         
         # Check if we should continue
         if daily_trade_count >= MAX_TRADES_PER_DAY:
@@ -712,8 +731,12 @@ class Command(BaseCommand):
         QUANTITY = 1  # Alice Blue requirement
         LOT_SIZE = 35  # Alice Blue default
         MAX_TRADES_PER_DAY = 3
-        MAX_DAILY_LOSS = 800  # CONSERVATIVE
-        PROFIT_TARGET_DAILY = 500  # CONSERVATIVE
+        
+        # Dynamic limits scaled by quantity
+        BASE_MAX_DAILY_LOSS = 800  # Base max daily loss per quantity
+        BASE_PROFIT_TARGET_DAILY = 500  # Base daily profit target per quantity
+        MAX_DAILY_LOSS = BASE_MAX_DAILY_LOSS * QUANTITY
+        PROFIT_TARGET_DAILY = BASE_PROFIT_TARGET_DAILY * QUANTITY
         
         # Update daily trade count
         daily_trade_count += 1
@@ -738,16 +761,23 @@ class Command(BaseCommand):
             option_direction = "BUY"
             self.stdout.write(f"📞 FUTURE=SELL → BUY Put Option: {option_symbol}")
         
-        # Dynamic risk management based on movement strength - CONSERVATIVE TARGETS
+        # Dynamic risk management based on movement strength - SCALED BY QUANTITY
+        BASE_TARGET_PROFIT_STRONG = 800   # Base per quantity
+        BASE_TARGET_PROFIT_MODERATE = 500  # Base per quantity
+        BASE_TARGET_PROFIT_WEAK = 300      # Base per quantity
+        BASE_STOPLOSS_STRONG = 200    # Base per quantity
+        BASE_STOPLOSS_MODERATE = 300  # Base per quantity
+        BASE_STOPLOSS_WEAK = 400      # Base per quantity
+        
         if movement_strength == "STRONG":
-            TARGET_PROFIT = 800  # CONSERVATIVE
-            STOPLOSS = 200  # CONSERVATIVE
+            TARGET_PROFIT = BASE_TARGET_PROFIT_STRONG * QUANTITY
+            STOPLOSS = BASE_STOPLOSS_STRONG * QUANTITY
         elif movement_strength == "MODERATE":
-            TARGET_PROFIT = 500  # CONSERVATIVE
-            STOPLOSS = 300  # CONSERVATIVE
+            TARGET_PROFIT = BASE_TARGET_PROFIT_MODERATE * QUANTITY
+            STOPLOSS = BASE_STOPLOSS_MODERATE * QUANTITY
         else:  # WEAK
-            TARGET_PROFIT = 300  # CONSERVATIVE
-            STOPLOSS = 400  # CONSERVATIVE
+            TARGET_PROFIT = BASE_TARGET_PROFIT_WEAK * QUANTITY
+            STOPLOSS = BASE_STOPLOSS_WEAK * QUANTITY
         
         self.stdout.write(f"🎯 Movement Strength: {movement_strength}")
         self.stdout.write(f"🎯 Dynamic Target: ₹{TARGET_PROFIT}")
@@ -962,8 +992,12 @@ class Command(BaseCommand):
         
         # Check if we should continue trading
         MAX_TRADES_PER_DAY = 3
-        MAX_DAILY_LOSS = 800  # CONSERVATIVE
-        PROFIT_TARGET_DAILY = 500  # CONSERVATIVE
+        
+        # Dynamic limits scaled by quantity
+        BASE_MAX_DAILY_LOSS = 800  # Base max daily loss per quantity
+        BASE_PROFIT_TARGET_DAILY = 500  # Base daily profit target per quantity
+        MAX_DAILY_LOSS = BASE_MAX_DAILY_LOSS * QUANTITY
+        PROFIT_TARGET_DAILY = BASE_PROFIT_TARGET_DAILY * QUANTITY
         
         if daily_trade_count >= MAX_TRADES_PER_DAY:
             self.stdout.write(self.style.ERROR(f"🛑 MAXIMUM TRADES REACHED: {daily_trade_count}/{MAX_TRADES_PER_DAY}"))
