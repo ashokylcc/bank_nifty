@@ -93,7 +93,7 @@ class Command(BaseCommand):
         PROFIT_TARGET_DAILY = BASE_PROFIT_TARGET_DAILY * QUANTITY
         
         
-        YESTERDAY_CLOSING = 55100  # Update this daily
+        YESTERDAY_CLOSING = 55300  # Update this daily
 
         FUTURE_SYMBOL = "BANKNIFTY30SEP25F"
         OPTION_SYMBOL = "BANKNIFTY30SEP25"

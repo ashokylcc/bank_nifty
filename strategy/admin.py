@@ -9,3 +9,5 @@ class TradeConfigAdmin(admin.ModelAdmin):
 class TradeLogAdmin(admin.ModelAdmin):
     list_display = ('timestamp', 'option_symbol', 'direction', 'entry_price', 'exit_price', 'pnl', 'status')
     list_filter = ('status', 'direction')
+    # ✅ Pagination: number of records per page
+    list_per_page = 10   # default is 100
