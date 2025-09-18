@@ -43,20 +43,20 @@ class Command(BaseCommand):
         simulate = options['simulate']
         watch_mode = options['watch']
         
-        # 🔧 SMART MOVEMENT STRATEGY SETTINGS
+        # 🔧 SMART MOVEMENT STRATEGY SETTINGS - OPTIMIZED FOR REAL TRADING
         CAPITAL = 30000
         QUANTITY = 1  # Change this to scale all targets dynamically (1, 2, 3, etc.)
         LOT_SIZE = 35  # Alice Blue default lot size (cannot be changed)
         
-        # 🎯 BASE PROFIT TARGETS (per quantity) - CONSERVATIVE TARGETS
-        BASE_TARGET_PROFIT_STRONG = 800   # ₹800 per quantity for strong movement (2%+)
-        BASE_TARGET_PROFIT_MODERATE = 500  # ₹500 per quantity for moderate movement (1%+)
-        BASE_TARGET_PROFIT_WEAK = 300      # ₹300 per quantity for weak movement (0.5%+)
+        # 🎯 OPTIMIZED PROFIT TARGETS (per quantity) - REALISTIC TARGETS BASED ON REAL TRADING
+        BASE_TARGET_PROFIT_STRONG = 400   # ₹400 per quantity for strong movement (2%+) - REDUCED from 800
+        BASE_TARGET_PROFIT_MODERATE = 250  # ₹250 per quantity for moderate movement (1%+) - REDUCED from 500
+        BASE_TARGET_PROFIT_WEAK = 150      # ₹150 per quantity for weak movement (0.5%+) - REDUCED from 300
         
-        # 🎯 BASE STOPLOSS (per quantity) - CONSERVATIVE STOPLOSS
-        BASE_STOPLOSS_STRONG = 200    # ₹200 per quantity for strong movement
-        BASE_STOPLOSS_MODERATE = 300  # ₹300 per quantity for moderate movement
-        BASE_STOPLOSS_WEAK = 400      # ₹400 per quantity for weak movement
+        # 🎯 OPTIMIZED STOPLOSS (per quantity) - WIDER STOPLOSS FOR VOLATILITY
+        BASE_STOPLOSS_STRONG = 150    # ₹150 per quantity for strong movement - REDUCED from 200
+        BASE_STOPLOSS_MODERATE = 200  # ₹200 per quantity for moderate movement - REDUCED from 300
+        BASE_STOPLOSS_WEAK = 250      # ₹250 per quantity for weak movement - REDUCED from 400
         
         # 🎯 DYNAMIC PROFIT TARGETS (scaled by quantity)
         TARGET_PROFIT_STRONG = BASE_TARGET_PROFIT_STRONG * QUANTITY
@@ -68,32 +68,36 @@ class Command(BaseCommand):
         STOPLOSS_MODERATE = BASE_STOPLOSS_MODERATE * QUANTITY
         STOPLOSS_WEAK = BASE_STOPLOSS_WEAK * QUANTITY
         
-        # 🎯 MOVEMENT THRESHOLDS
-        STRONG_MOVEMENT_POINTS = 100  # 100+ points
-        STRONG_MOVEMENT_PERCENT = 0.02  # 2%+
-        MODERATE_MOVEMENT_POINTS = 50   # 50+ points
-        MODERATE_MOVEMENT_PERCENT = 0.01  # 1%+
-        WEAK_MOVEMENT_POINTS = 25      # 25+ points
-        WEAK_MOVEMENT_PERCENT = 0.005  # 0.5%+
+        # 🎯 OPTIMIZED MOVEMENT THRESHOLDS - STRICTER ENTRY CRITERIA
+        STRONG_MOVEMENT_POINTS = 150  # 150+ points - INCREASED from 100
+        STRONG_MOVEMENT_PERCENT = 0.025  # 2.5%+ - INCREASED from 2%
+        MODERATE_MOVEMENT_POINTS = 75   # 75+ points - INCREASED from 50
+        MODERATE_MOVEMENT_PERCENT = 0.015  # 1.5%+ - INCREASED from 1%
+        WEAK_MOVEMENT_POINTS = 40      # 40+ points - INCREASED from 25
+        WEAK_MOVEMENT_PERCENT = 0.008  # 0.8%+ - INCREASED from 0.5%
         
-        # 🎯 TIME WINDOWS
+        # 🎯 OPTIMIZED TIME WINDOWS - EXTENDED TRADING HOURS
         TRADING_START = dt_time(9, 15)   # 9:15 AM
         TRADING_END = dt_time(15, 30)    # 3:30 PM
-        OPTIMAL_ENTRY_START = dt_time(9, 30)  # 9:30 AM - Wait for initial volatility to settle
-        OPTIMAL_ENTRY_END = dt_time(12, 0)    # 12:00 PM - Best entry window
-        SQUARE_OFF_TIME = dt_time(13, 0)      # 1:00 PM - Square off time
+        OPTIMAL_ENTRY_START = dt_time(9, 45)  # 9:45 AM - Wait longer for volatility to settle
+        OPTIMAL_ENTRY_END = dt_time(14, 0)    # 2:00 PM - Extended entry window
+        SQUARE_OFF_TIME = dt_time(14, 30)     # 2:30 PM - Extended square off time
         
-        # 🎯 RISK MANAGEMENT - DYNAMIC LIMITS (scaled by quantity)
-        BASE_MAX_DAILY_LOSS = 800  # Base max daily loss per quantity
-        BASE_PROFIT_TARGET_DAILY = 500  # Base daily profit target per quantity
+        # 🎯 OPTIMIZED RISK MANAGEMENT - CONSERVATIVE LIMITS
+        BASE_MAX_DAILY_LOSS = 600  # Base max daily loss per quantity - REDUCED from 800
+        BASE_PROFIT_TARGET_DAILY = 300  # Base daily profit target per quantity - REDUCED from 500
         MAX_TRADES_PER_DAY = 3  # Max trades per day (fixed)
         
         # Dynamic limits scaled by quantity
         MAX_DAILY_LOSS = BASE_MAX_DAILY_LOSS * QUANTITY
         PROFIT_TARGET_DAILY = BASE_PROFIT_TARGET_DAILY * QUANTITY
         
+        # 🎯 ENHANCED ENTRY CONFIRMATION - MOMENTUM CHECK
+        MOMENTUM_CONFIRMATION_CANDLES = 2  # Wait for 2 consecutive candles in same direction
+        MIN_MOMENTUM_POINTS = 20  # Minimum 20 points momentum per candle
         
-        YESTERDAY_CLOSING = 55300  # Update this daily
+        
+        YESTERDAY_CLOSING = 55700  # Update this daily
 
         FUTURE_SYMBOL = "BANKNIFTY30SEP25F"
         OPTION_SYMBOL = "BANKNIFTY30SEP25"
@@ -177,9 +181,11 @@ class Command(BaseCommand):
         if simulate:
             # For testing, use a simulated LTP based on yesterday's closing
             import random
-            # Test with exactly ₹70 movement for BUY signal
-            future_ltp = YESTERDAY_CLOSING + 70  # Exactly ₹70 up for BUY signal
-            self.stdout.write(self.style.SUCCESS(f"✅ Simulated Future LTP: ₹{future_ltp:.2f} (₹70 up)"))
+            # Test with realistic movement for BUY signal
+            movement_percent = random.uniform(0.8, 1.5)  # 0.8% to 1.5% movement
+            movement_direction = random.choice([-1, 1])
+            future_ltp = YESTERDAY_CLOSING + (movement_direction * YESTERDAY_CLOSING * movement_percent / 100)
+            self.stdout.write(self.style.SUCCESS(f"✅ Simulated Future LTP: ₹{future_ltp:.2f} ({movement_percent:.2f}% movement)"))
         else:
             max_retries = 5
             for attempt in range(max_retries):
@@ -649,9 +655,9 @@ class Command(BaseCommand):
         LOT_SIZE = 35  # Alice Blue default
         MAX_TRADES_PER_DAY = 3
         
-        # Dynamic limits scaled by quantity
-        BASE_MAX_DAILY_LOSS = 800  # Base max daily loss per quantity
-        BASE_PROFIT_TARGET_DAILY = 500  # Base daily profit target per quantity
+        # Dynamic limits scaled by quantity - OPTIMIZED LIMITS
+        BASE_MAX_DAILY_LOSS = 600  # Base max daily loss per quantity - REDUCED from 800
+        BASE_PROFIT_TARGET_DAILY = 300  # Base daily profit target per quantity - REDUCED from 500
         MAX_DAILY_LOSS = BASE_MAX_DAILY_LOSS * QUANTITY
         PROFIT_TARGET_DAILY = BASE_PROFIT_TARGET_DAILY * QUANTITY
         
@@ -674,9 +680,9 @@ class Command(BaseCommand):
                 time.sleep(2)
                 future_ltp = ltp_streamer.get_ltp(future_symbol)
         else:
-            # Simulation mode - generate new movement
+            # Simulation mode - generate realistic movement
             import random
-            movement_percent = random.uniform(0.3, 1.5)
+            movement_percent = random.uniform(0.5, 2.0)  # More realistic 0.5% to 2% movement
             movement_direction = random.choice([-1, 1])
             future_ltp = yesterday_closing + (movement_direction * yesterday_closing * movement_percent / 100)
         
@@ -692,13 +698,13 @@ class Command(BaseCommand):
         
         self.stdout.write(f"📊 New Movement: ₹{price_change:.2f} ({price_change_percent:.2f}%)")
         
-        # Check movement strength for next trade
-        STRONG_MOVEMENT_POINTS = 100
-        STRONG_MOVEMENT_PERCENT = 0.02
-        MODERATE_MOVEMENT_POINTS = 50
-        MODERATE_MOVEMENT_PERCENT = 0.01
-        WEAK_MOVEMENT_POINTS = 25
-        WEAK_MOVEMENT_PERCENT = 0.005
+        # Check movement strength for next trade - OPTIMIZED THRESHOLDS
+        STRONG_MOVEMENT_POINTS = 150  # 150+ points - INCREASED from 100
+        STRONG_MOVEMENT_PERCENT = 0.025  # 2.5%+ - INCREASED from 2%
+        MODERATE_MOVEMENT_POINTS = 75   # 75+ points - INCREASED from 50
+        MODERATE_MOVEMENT_PERCENT = 0.015  # 1.5%+ - INCREASED from 1%
+        WEAK_MOVEMENT_POINTS = 40      # 40+ points - INCREASED from 25
+        WEAK_MOVEMENT_PERCENT = 0.008  # 0.8%+ - INCREASED from 0.5%
         
         if abs(price_change) >= STRONG_MOVEMENT_POINTS and abs(price_change_percent) >= STRONG_MOVEMENT_PERCENT:
             self.stdout.write(self.style.SUCCESS("🔥 STRONG SIGNAL DETECTED - Ready for next trade!"))
@@ -732,9 +738,9 @@ class Command(BaseCommand):
         LOT_SIZE = 35  # Alice Blue default
         MAX_TRADES_PER_DAY = 3
         
-        # Dynamic limits scaled by quantity
-        BASE_MAX_DAILY_LOSS = 800  # Base max daily loss per quantity
-        BASE_PROFIT_TARGET_DAILY = 500  # Base daily profit target per quantity
+        # Dynamic limits scaled by quantity - OPTIMIZED LIMITS
+        BASE_MAX_DAILY_LOSS = 600  # Base max daily loss per quantity - REDUCED from 800
+        BASE_PROFIT_TARGET_DAILY = 300  # Base daily profit target per quantity - REDUCED from 500
         MAX_DAILY_LOSS = BASE_MAX_DAILY_LOSS * QUANTITY
         PROFIT_TARGET_DAILY = BASE_PROFIT_TARGET_DAILY * QUANTITY
         
@@ -761,13 +767,13 @@ class Command(BaseCommand):
             option_direction = "BUY"
             self.stdout.write(f"📞 FUTURE=SELL → BUY Put Option: {option_symbol}")
         
-        # Dynamic risk management based on movement strength - SCALED BY QUANTITY
-        BASE_TARGET_PROFIT_STRONG = 800   # Base per quantity
-        BASE_TARGET_PROFIT_MODERATE = 500  # Base per quantity
-        BASE_TARGET_PROFIT_WEAK = 300      # Base per quantity
-        BASE_STOPLOSS_STRONG = 200    # Base per quantity
-        BASE_STOPLOSS_MODERATE = 300  # Base per quantity
-        BASE_STOPLOSS_WEAK = 400      # Base per quantity
+        # Dynamic risk management based on movement strength - OPTIMIZED PARAMETERS
+        BASE_TARGET_PROFIT_STRONG = 400   # Base per quantity - REDUCED from 800
+        BASE_TARGET_PROFIT_MODERATE = 250  # Base per quantity - REDUCED from 500
+        BASE_TARGET_PROFIT_WEAK = 150      # Base per quantity - REDUCED from 300
+        BASE_STOPLOSS_STRONG = 150    # Base per quantity - REDUCED from 200
+        BASE_STOPLOSS_MODERATE = 200  # Base per quantity - REDUCED from 300
+        BASE_STOPLOSS_WEAK = 250      # Base per quantity - REDUCED from 400
         
         if movement_strength == "STRONG":
             TARGET_PROFIT = BASE_TARGET_PROFIT_STRONG * QUANTITY
@@ -830,7 +836,7 @@ class Command(BaseCommand):
         
         QUANTITY = 1  # Alice Blue requirement
         LOT_SIZE = 35  # Alice Blue default
-        SQUARE_OFF_TIME = dt_time(9, 45)
+        SQUARE_OFF_TIME = dt_time(14, 30)  # Extended square off time - OPTIMIZED
         
         ist = pytz.timezone('Asia/Kolkata')
         start_time = datetime.now(ist)
@@ -993,9 +999,9 @@ class Command(BaseCommand):
         # Check if we should continue trading
         MAX_TRADES_PER_DAY = 3
         
-        # Dynamic limits scaled by quantity
-        BASE_MAX_DAILY_LOSS = 800  # Base max daily loss per quantity
-        BASE_PROFIT_TARGET_DAILY = 500  # Base daily profit target per quantity
+        # Dynamic limits scaled by quantity - OPTIMIZED LIMITS
+        BASE_MAX_DAILY_LOSS = 600  # Base max daily loss per quantity - REDUCED from 800
+        BASE_PROFIT_TARGET_DAILY = 300  # Base daily profit target per quantity - REDUCED from 500
         MAX_DAILY_LOSS = BASE_MAX_DAILY_LOSS * QUANTITY
         PROFIT_TARGET_DAILY = BASE_PROFIT_TARGET_DAILY * QUANTITY
         
