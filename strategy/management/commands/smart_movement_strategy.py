@@ -45,8 +45,13 @@ class Command(BaseCommand):
         
         # 🔧 SMART MOVEMENT STRATEGY SETTINGS - OPTIMIZED FOR REAL TRADING
         CAPITAL = 30000
-        QUANTITY = 1  # Change this to scale all targets dynamically (1, 2, 3, etc.)
+        QUANTITY = 1  # Number of lots. Increase to scale position size (e.g., 2, 3, ...)
         LOT_SIZE = 35  # Alice Blue default lot size (cannot be changed)
+        ACTUAL_QTY = LOT_SIZE * QUANTITY  # Actual exchange quantity (must be multiple of lot size)
+
+        # Make quantity/lot size available to helper methods
+        self.quantity = QUANTITY
+        self.lot_size = LOT_SIZE
         
         # 🎯 OPTIMIZED PROFIT TARGETS (per quantity) - REALISTIC TARGETS BASED ON REAL TRADING
         BASE_TARGET_PROFIT_STRONG = 400   # ₹400 per quantity for strong movement (2%+) - REDUCED from 800
@@ -97,7 +102,7 @@ class Command(BaseCommand):
         MIN_MOMENTUM_POINTS = 20  # Minimum 20 points momentum per candle
         
         
-        YESTERDAY_CLOSING = 55700  # Update this daily
+        YESTERDAY_CLOSING = 55500  # Update this daily
 
         FUTURE_SYMBOL = "BANKNIFTY30SEP25F"
         OPTION_SYMBOL = "BANKNIFTY30SEP25"
@@ -115,7 +120,7 @@ class Command(BaseCommand):
         self.stdout.write(f"🕐 Current Time: {current_time.strftime('%H:%M:%S')} IST")
         self.stdout.write(f"📊 Yesterday's Closing: ₹{YESTERDAY_CLOSING}")
         self.stdout.write(f"🎯 Daily Target: ₹{PROFIT_TARGET_DAILY} | Max Loss: ₹{MAX_DAILY_LOSS}")
-        self.stdout.write(f"📦 Quantity: {QUANTITY} | Lot Size: {LOT_SIZE} | Capital: ₹{CAPITAL}")
+        self.stdout.write(f"📦 Lots: {QUANTITY} | Lot Size: {LOT_SIZE} | Actual Qty: {ACTUAL_QTY} | Capital: ₹{CAPITAL}")
         self.stdout.write(f"⏰ Optimal Entry Window: {OPTIMAL_ENTRY_START.strftime('%H:%M')} - {OPTIMAL_ENTRY_END.strftime('%H:%M')}")
         self.stdout.write(f"🛡️ Max Daily Loss: ₹{MAX_DAILY_LOSS} | Max Trades: {MAX_TRADES_PER_DAY}")
         self.stdout.write(f"🎯 DYNAMIC SCALING: All targets × {QUANTITY}")
@@ -362,17 +367,17 @@ class Command(BaseCommand):
                 buy_order_id = ltp_streamer.alice.place_order(
                     transaction_type=TransactionType.Buy,
                     instrument=instrument,
-                    quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
+                    quantity=ACTUAL_QTY,  # Multiple of lot size
                     order_type=OrderType.Market,  # Market order for immediate execution
                     product_type=ProductType.Intraday
                     # No price parameter for market orders
                 )
-                self.stdout.write(self.style.SUCCESS(f"🛒 BUY order placed: {buy_order_id} | Price: ₹{entry_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                self.stdout.write(self.style.SUCCESS(f"🛒 BUY order placed: {buy_order_id} | Price: ₹{entry_price} | Quantity: {ACTUAL_QTY} ({QUANTITY} lots)"))
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f"❌ Failed to place BUY order: {e}"))
                 return
         else:
-            self.stdout.write(f"🎮 SIMULATION: BUY order placed | Price: ₹{entry_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)")
+            self.stdout.write(f"🎮 SIMULATION: BUY order placed | Price: ₹{entry_price} | Quantity: {ACTUAL_QTY} ({QUANTITY} lots)")
         
         # 🎯 Step: Position Monitoring with Trailing Stoploss
         self.stdout.write("\n🔄 Step: Position Monitoring with Trailing Stoploss")
@@ -397,19 +402,19 @@ class Command(BaseCommand):
             
             if scenario == 'target':
                 # Simulate target hit (positive movement) - Use dynamic target
-                target_price_change = target_profit / LOT_SIZE
+                target_price_change = target_profit / ACTUAL_QTY
                 price_change = random.uniform(target_price_change * 0.8, target_price_change * 1.2)
                 exit_price = entry_price + price_change
-                pnl = (exit_price - entry_price) * LOT_SIZE
+                pnl = (exit_price - entry_price) * ACTUAL_QTY
                 status = "TARGET HIT"
                 self.stdout.write(f"📊 Simulated Trade Result (TARGET SCENARIO):")
                 
             elif scenario == 'stoploss':
                 # Simulate stoploss hit (negative movement) - Use dynamic stoploss
-                stoploss_price_change = -stoploss / LOT_SIZE
+                stoploss_price_change = -stoploss / ACTUAL_QTY
                 price_change = random.uniform(stoploss_price_change * 0.8, stoploss_price_change * 1.2)
                 exit_price = entry_price + price_change
-                pnl = (exit_price - entry_price) * LOT_SIZE
+                pnl = (exit_price - entry_price) * ACTUAL_QTY
                 status = "STOPLOSS HIT"
                 self.stdout.write(f"📊 Simulated Trade Result (STOPLOSS SCENARIO):")
                 
@@ -417,7 +422,7 @@ class Command(BaseCommand):
                 # Simulate time exit (small movement) - Better small profits
                 price_change = random.uniform(3, 10)  # Small positive movement for small profit
                 exit_price = entry_price + price_change
-                pnl = (exit_price - entry_price) * LOT_SIZE
+                pnl = (exit_price - entry_price) * ACTUAL_QTY
                 status = "TIME EXIT"
                 self.stdout.write(f"📊 Simulated Trade Result (TIME EXIT SCENARIO):")
             
@@ -430,13 +435,13 @@ class Command(BaseCommand):
             
             if status == "TIME EXIT":
                 self.stdout.write(f"   💡 Note: Small profit achieved (₹{pnl:.2f})")
-                self.stdout.write(f"🎮 SIMULATION: SELL order placed | Price: ₹{exit_price:.2f} | Quantity: {QUANTITY} ({LOT_SIZE} lots)")
+                self.stdout.write(f"🎮 SIMULATION: SELL order placed | Price: ₹{exit_price:.2f} | Quantity: {ACTUAL_QTY} ({QUANTITY} lots)")
             elif status == "TARGET HIT":
                 self.stdout.write(f"   🎯 Note: Target hit! Profit: ₹{pnl:.2f}")
-                self.stdout.write(f"🎮 SIMULATION: SELL order placed | Price: ₹{exit_price:.2f} | Quantity: {QUANTITY} ({LOT_SIZE} lots)")
+                self.stdout.write(f"🎮 SIMULATION: SELL order placed | Price: ₹{exit_price:.2f} | Quantity: {ACTUAL_QTY} ({QUANTITY} lots)")
             elif status == "STOPLOSS HIT":
                 self.stdout.write(f"   🛑 Note: Stoploss hit! Loss: ₹{pnl:.2f}")
-                self.stdout.write(f"🎮 SIMULATION: SELL order placed | Price: ₹{exit_price:.2f} | Quantity: {QUANTITY} ({LOT_SIZE} lots)")
+                self.stdout.write(f"🎮 SIMULATION: SELL order placed | Price: ₹{exit_price:.2f} | Quantity: {ACTUAL_QTY} ({QUANTITY} lots)")
         else:
             # Live monitoring with trailing stoploss
             self.stdout.write("🔄 Live monitoring with trailing stoploss...")
@@ -449,7 +454,7 @@ class Command(BaseCommand):
                 if current_time_only >= SQUARE_OFF_TIME:
                     status = "TIME EXIT"
                     exit_price = ltp_streamer.get_ltp(option_symbol)
-                    pnl = (exit_price - entry_price) * LOT_SIZE
+                    pnl = (exit_price - entry_price) * ACTUAL_QTY
                     self.stdout.write(f"⏰ Time Exit! PnL: ₹{pnl:.2f}")
                     # Place SELL order to close position
                     if not simulate:
@@ -457,11 +462,11 @@ class Command(BaseCommand):
                             sell_order_id = ltp_streamer.alice.place_order(
                                 transaction_type=TransactionType.Sell,
                                 instrument=instrument,
-                                quantity=LOT_SIZE,
+                                quantity=ACTUAL_QTY,
                                 order_type=OrderType.Market,
                                 product_type=ProductType.Intraday
                             )
-                            self.stdout.write(self.style.SUCCESS(f"🛒 SELL order placed: {sell_order_id} | Price: ₹{exit_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                            self.stdout.write(self.style.SUCCESS(f"🛒 SELL order placed: {sell_order_id} | Price: ₹{exit_price} | Quantity: {ACTUAL_QTY} ({QUANTITY} lots)"))
                         except Exception as e:
                             self.stdout.write(self.style.ERROR(f"❌ Failed to place SELL order: {e}"))
                     else:
@@ -474,7 +479,7 @@ class Command(BaseCommand):
                     continue
                 
                 # Calculate PnL
-                pnl = (current_ltp - entry_price) * LOT_SIZE
+                pnl = (current_ltp - entry_price) * ACTUAL_QTY
                 
                 # Update highest profit for trailing
                 if pnl > highest_profit:
@@ -493,11 +498,11 @@ class Command(BaseCommand):
                             sell_order_id = ltp_streamer.alice.place_order(
                                 transaction_type=TransactionType.Sell,
                                 instrument=instrument,
-                                quantity=LOT_SIZE,
+                                quantity=ACTUAL_QTY,
                                 order_type=OrderType.Market,
                                 product_type=ProductType.Intraday
                             )
-                            self.stdout.write(self.style.SUCCESS(f"🛒 SELL order placed: {sell_order_id} | Price: ₹{exit_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                            self.stdout.write(self.style.SUCCESS(f"🛒 SELL order placed: {sell_order_id} | Price: ₹{exit_price} | Quantity: {ACTUAL_QTY} ({QUANTITY} lots)"))
                         except Exception as e:
                             self.stdout.write(self.style.ERROR(f"❌ Failed to place SELL order: {e}"))
                     else:
@@ -513,11 +518,11 @@ class Command(BaseCommand):
                             sell_order_id = ltp_streamer.alice.place_order(
                                 transaction_type=TransactionType.Sell,
                                 instrument=instrument,
-                                quantity=LOT_SIZE,
+                                quantity=ACTUAL_QTY,
                                 order_type=OrderType.Market,
                                 product_type=ProductType.Intraday
                             )
-                            self.stdout.write(self.style.SUCCESS(f"🛒 SELL order placed: {sell_order_id} | Price: ₹{exit_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                            self.stdout.write(self.style.SUCCESS(f"🛒 SELL order placed: {sell_order_id} | Price: ₹{exit_price} | Quantity: {ACTUAL_QTY} ({QUANTITY} lots)"))
                         except Exception as e:
                             self.stdout.write(self.style.ERROR(f"❌ Failed to place SELL order: {e}"))
                     else:
@@ -651,8 +656,8 @@ class Command(BaseCommand):
         self.stdout.write("=" * 50)
         
         # Import the same parameters from the main method
-        QUANTITY = 1  # Alice Blue requirement
-        LOT_SIZE = 35  # Alice Blue default
+        QUANTITY = getattr(self, 'quantity', 1)
+        LOT_SIZE = getattr(self, 'lot_size', 35)
         MAX_TRADES_PER_DAY = 3
         
         # Dynamic limits scaled by quantity - OPTIMIZED LIMITS
