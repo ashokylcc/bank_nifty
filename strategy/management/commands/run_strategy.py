@@ -56,7 +56,7 @@ class Command(BaseCommand):
         TARGET_PROFIT = 500 * QUANTITY  # Target profit per lot (dynamic)
         STOPLOSS = 1000 * QUANTITY      # Stoploss per lot (dynamic)
         SQUARE_OFF_TIME = dt_time(15, 30)  # Exit at 9:45 AM
-        YESTERDAY_CLOSING = 54900  # Update this daily
+        YESTERDAY_CLOSING = 55700  # Update this daily
 
         self.stdout.write(self.style.SUCCESS("🚀 Bank Nifty Future-Based Option Strategy"))
         self.stdout.write("=" * 50)
