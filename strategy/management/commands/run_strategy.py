@@ -53,10 +53,12 @@ class Command(BaseCommand):
         # QUANTITY = 2  # 2 quantity = 70 lots (₹35,000 capital needed)
         # QUANTITY = 3  # 3 quantity = 105 lots (₹52,500 capital needed)
         LOT_SIZE = int(QUANTITY * 35)  # Automatically calculate lot size based on quantity (rounded to integer)
-        TARGET_PROFIT = 500 * QUANTITY  # Target profit per lot (dynamic)
-        STOPLOSS = 1000 * QUANTITY      # Stoploss per lot (dynamic)
+        TARGET_PROFIT = 650 * QUANTITY  # Target profit per lot (adjusted for slippage)
+        STOPLOSS = 1200 * QUANTITY      # Stoploss per lot (dynamic)
         SQUARE_OFF_TIME = dt_time(15, 30)  # Exit at 9:45 AM
-        YESTERDAY_CLOSING = 55700  # Update this daily
+        YESTERDAY_CLOSING = 56878.70
+        FUTURE_SYMBOL = 'BANKNIFTY28OCT25F' 
+        OPTION_PREFIX = 'BANKNIFTY28OCT25' 
 
         self.stdout.write(self.style.SUCCESS("🚀 Bank Nifty Future-Based Option Strategy"))
         self.stdout.write("=" * 50)
@@ -94,7 +96,7 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS("✅ WebSocket connection established"))
 
         # 📊 Get Bank Nifty Future Symbol and LTP
-        future_symbol = "BANKNIFTY30SEP25F"  # Active future symbol
+        future_symbol = FUTURE_SYMBOL  # Active future symbol
         if not simulate and ltp_streamer:
             ltp_streamer.subscribe(future_symbol)
         
@@ -104,9 +106,12 @@ class Command(BaseCommand):
         if simulate:
             # For testing, use a simulated LTP based on yesterday's closing
             import random
-            # Test with exactly ₹70 movement for BUY signal
-            future_ltp = YESTERDAY_CLOSING + 70  # Exactly ₹70 up for BUY signal
-            self.stdout.write(self.style.SUCCESS(f"✅ Simulated Future LTP: ₹{future_ltp:.2f} (₹70 up)"))
+            # Test with random movement to test different trend categories
+            movement_percent = random.uniform(0.1, 0.8)  # 0.1% to 0.8% movement
+            movement_direction = random.choice([-1, 1])
+            future_ltp = YESTERDAY_CLOSING + (movement_direction * YESTERDAY_CLOSING * movement_percent / 100)
+            movement_points = abs(future_ltp - YESTERDAY_CLOSING)
+            self.stdout.write(self.style.SUCCESS(f"✅ Simulated Future LTP: ₹{future_ltp:.2f} ({movement_points:.1f} points, {movement_percent:.2f}%)"))
         else:
             max_retries = 5
             for attempt in range(max_retries):
@@ -140,30 +145,27 @@ class Command(BaseCommand):
 
             self.stdout.write(f"✅ Future LTP: ₹{future_ltp}")
 
-        # 🎯 NEW: Dynamic Risk Management based on market movement
-        # Calculate price change percentage
-        price_change_percent = abs((future_ltp - YESTERDAY_CLOSING) / YESTERDAY_CLOSING * 100)
+        # 🎯 Calculate movement once (fix duplicate calculations)
+        price_change = future_ltp - YESTERDAY_CLOSING
+        price_change_percent = abs(price_change / YESTERDAY_CLOSING * 100)
         
+        # 🎯 Dynamic Risk Management based on market movement
         if price_change_percent > 0.5:  # Strong trend
-            TARGET_PROFIT = 1000 * QUANTITY  # Higher target for strong trends
-            STOPLOSS = 1000 * QUANTITY       # Tighter stoploss for strong trends
+            TARGET_PROFIT = 950 * QUANTITY   # High target for strong trends (adjusted for slippage)
+            STOPLOSS = 800 * QUANTITY        # Moderate stoploss for strong trends
             self.stdout.write(self.style.SUCCESS(f"🎯 Strong trend detected - Target: ₹{TARGET_PROFIT}, Stoploss: ₹{STOPLOSS}"))
         elif price_change_percent > 0.3:  # Moderate trend
-            TARGET_PROFIT = 700 * QUANTITY   # Standard target
-            STOPLOSS = 1000 * QUANTITY       # Standard stoploss
+            TARGET_PROFIT = 750 * QUANTITY   # Medium target for moderate trends (adjusted for slippage)
+            STOPLOSS = 700 * QUANTITY        # Tighter stoploss for moderate trends
             self.stdout.write(self.style.SUCCESS(f"🎯 Moderate trend - Target: ₹{TARGET_PROFIT}, Stoploss: ₹{STOPLOSS}"))
-        else:  # Weak trend (should not trade, but if we do)
-            TARGET_PROFIT = 500 * QUANTITY   # Lower target for weak trends
-            STOPLOSS = 1000 * QUANTITY       # Very tight stoploss for weak trends
+        else:  # Weak trend
+            TARGET_PROFIT = 550 * QUANTITY   # Lower target for weak trends (adjusted for slippage)
+            STOPLOSS = 500 * QUANTITY        # Tight stoploss for weak trends
             self.stdout.write(self.style.WARNING(f"🎯 Weak trend - Target: ₹{TARGET_PROFIT}, Stoploss: ₹{STOPLOSS}"))
 
         # 🎯 Determine FUTURE Direction based on LTP vs Yesterday's Closing
         self.stdout.write("\n📈 Step: Determine FUTURE Direction")
         self.stdout.write("-" * 30)
-        
-        # Use yesterday's closing price as reference
-        price_change = future_ltp - YESTERDAY_CLOSING
-        price_change_percent = (price_change / YESTERDAY_CLOSING) * 100
         
         if price_change > 0:
             future_direction = "BUY"  # Future is above yesterday's closing
@@ -177,8 +179,8 @@ class Command(BaseCommand):
         self.stdout.write("-" * 30)
         
         # Check if market movement is significant enough - INCREASED FOR BETTER SUCCESS
-        min_movement = 70  # Increased from ₹70 to ₹150 for stronger signals
-        min_percent = 0.10   # Increased from 0.10% to 0.25% for stronger trends
+        min_movement = 150  # Increased from ₹70 to ₹150 for stronger signals
+        min_percent = 0.25   # Increased from 0.10% to 0.25% for stronger trends
         
         # 🎯 NEW: Enhanced Market Analysis
         self.stdout.write("\n🔍 Step: Enhanced Market Analysis")
@@ -198,20 +200,13 @@ class Command(BaseCommand):
             self.stdout.write("-" * 30)
             
             monitoring_start_time = datetime.now(ist)
-            max_monitoring_time = 25 * 60  # 25 minutes (until 9:40 AM)
             
             while True:
                 current_time = datetime.now(ist).time()
                 
-                # Check if we've reached trade end time (9:45 AM)
+                # Check if we've reached trade end time (3:30 PM - market close)
                 if current_time >= SQUARE_OFF_TIME:
-                    self.stdout.write(self.style.WARNING("⏰ Time's up! No sufficient movement detected."))
-                    return
-                
-                # Check if we've been monitoring too long (25 minutes max)
-                elapsed_minutes = (datetime.now(ist) - monitoring_start_time).seconds / 60
-                if elapsed_minutes >= max_monitoring_time:
-                    self.stdout.write(self.style.WARNING("⏰ Monitoring time limit reached. No sufficient movement."))
+                    self.stdout.write(self.style.WARNING("⏰ Market close! No sufficient movement detected."))
                     return
                 
                 # Get updated Future LTP
@@ -236,7 +231,8 @@ class Command(BaseCommand):
                             break
                         else:
                             # Log current status every 30 seconds
-                            if int(elapsed_minutes * 60) % 30 == 0:
+                            elapsed_seconds = (datetime.now(ist) - monitoring_start_time).seconds
+                            if elapsed_seconds % 30 == 0:
                                 self.stdout.write(f"📊 Monitoring... Movement: ₹{abs(price_change):.2f} | Need: ₹{min_movement} | Time: {current_time.strftime('%H:%M:%S')}")
                 
                 time.sleep(5)  # Check every 5 seconds
@@ -289,21 +285,18 @@ class Command(BaseCommand):
         self.stdout.write("\n🎯 Step: Select Option Based on Future Direction")
         self.stdout.write("-" * 30)
         
-        # Function to always round up to nearest 100
-        def round_up_to_100(value):
-            return int(((value + 99) // 100) * 100)
-
-        base_strike = round_up_to_100(YESTERDAY_CLOSING)
+        # Calculate ATM strike price (round to nearest 100)
+        atm_strike = round(YESTERDAY_CLOSING / 100) * 100
 
         if future_direction == "BUY":
-            strike_price = base_strike
-            option_symbol = f"BANKNIFTY30SEP25C{strike_price}"
+            strike_price = int(atm_strike)
+            option_symbol = f"{OPTION_PREFIX}C{strike_price}"
             option_direction = "BUY"
             self.stdout.write(self.style.SUCCESS(f"📞 FUTURE=BUY → BUY Call Option: {option_symbol}"))
             self.stdout.write(f"   💡 Strategy: Call Option (₹{strike_price}) for BUY signal")
         else:
-            strike_price = base_strike
-            option_symbol = f"BANKNIFTY30SEP25P{strike_price}"
+            strike_price = int(atm_strike)
+            option_symbol = f"{OPTION_PREFIX}P{strike_price}"
             option_direction = "BUY"
             self.stdout.write(self.style.SUCCESS(f"📞 FUTURE=SELL → BUY Put Option: {option_symbol}"))
             self.stdout.write(f"   💡 Strategy: Put Option (₹{strike_price}) for SELL signal")
