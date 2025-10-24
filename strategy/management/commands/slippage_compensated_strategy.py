@@ -1,4 +1,4 @@
-# strategy/management/commands/run_strategy.py
+# strategy/management/commands/slippage_compensated_strategy.py
 
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -12,7 +12,7 @@ from strategy.broker.live_ltp import WebSocketLTP
 from alice_blue import TransactionType, OrderType, ProductType
 
 class Command(BaseCommand):
-    help = "Bank Nifty Option Strategy - Based on Future Direction"
+    help = "Slippage-Compensated Bank Nifty Option Strategy - Daily Profit Focus"
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -21,22 +21,22 @@ class Command(BaseCommand):
             help='Run in simulation mode (no real trading)'
         )
         parser.add_argument(
-            '--profit-only',
+            '--conservative',
             action='store_true',
-            help='Only take high-probability trades (skip weak trends)'
+            help='Use conservative mode (smaller targets, tighter risk)'
         )
 
     def handle(self, *args, **kwargs):
         simulate = kwargs.get('simulate', False)
-        profit_only = kwargs.get('profit_only', False)
+        conservative = kwargs.get('conservative', False)
         
         # Set timezone to IST
         ist = pytz.timezone('Asia/Kolkata')
         now = datetime.now(ist)
         current_time = now.time()
 
-        # Check if we're within trading hours (9:15 AM to 9:45 AM) - Skip check in simulation mode
-        if not simulate and (current_time < dt_time(9, 15) or current_time > dt_time(15, 30)):  # Extended for testing
+        # Check if we're within trading hours (9:15 AM to 3:30 PM)
+        if not simulate and (current_time < dt_time(9, 15) or current_time > dt_time(15, 30)):
             self.stdout.write(self.style.WARNING(f"⏰ Outside trading hours. Current time: {current_time.strftime('%H:%M:%S')} IST. Trading window: 09:15-15:30"))
             return
 
@@ -45,27 +45,40 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR("❌ No active strategy config found."))
             return
 
-        # 🔧 IMPROVED Manual settings - More Conservative Risk Management
+        # 🎯 SLIPPAGE-COMPENSATED Strategy Settings
         CAPITAL = 30000
         QUANTITY = 1  # 1 quantity = 35 lots
         LOT_SIZE = int(QUANTITY * 35)  # 35 lots
         
-        # 🎯 IMPROVED: Better Risk-Reward Ratio
-        # Base targets (will be adjusted based on trend strength)
-        BASE_TARGET_PROFIT = 750 * QUANTITY  # ₹750 per lot (keeping your original target)
-        BASE_STOPLOSS = 1200 * QUANTITY     # ₹1200 per lot (keeping your original stop-loss)
+        # 🎯 SLIPPAGE-COMPENSATED Targets
+        if conservative:
+            # Conservative Mode: Smaller targets, tighter risk
+            BASE_TARGET_PROFIT = 400 * QUANTITY  # ₹400 per lot
+            BASE_STOPLOSS = 400 * QUANTITY      # ₹400 per lot (wider for better protection)
+            DAILY_PROFIT_TARGET = 400           # ₹400 daily target
+            DAILY_LOSS_LIMIT = 300              # ₹300 daily loss limit
+        else:
+            # Standard Mode: Higher targets with slippage compensation
+            BASE_TARGET_PROFIT = 650 * QUANTITY  # ₹650 per lot (slippage compensated)
+            BASE_STOPLOSS = 500 * QUANTITY      # ₹500 per lot (much wider protection)
+            DAILY_PROFIT_TARGET = 500           # ₹500 daily target
+            DAILY_LOSS_LIMIT = 500              # ₹500 daily loss limit
         
         SQUARE_OFF_TIME = dt_time(15, 30)  # Exit at 3:30 PM
         YESTERDAY_CLOSING = 58000
         FUTURE_SYMBOL = 'BANKNIFTY28OCT25F' 
         OPTION_PREFIX = 'BANKNIFTY28OCT25' 
 
-        self.stdout.write(self.style.SUCCESS("🚀 Bank Nifty Future-Based Option Strategy"))
-        self.stdout.write("=" * 50)
+        self.stdout.write(self.style.SUCCESS("🚀 Slippage-Compensated Bank Nifty Strategy"))
+        self.stdout.write("=" * 60)
         self.stdout.write(f"🕐 Current Time: {current_time.strftime('%H:%M:%S')} IST")
         self.stdout.write(f"📊 Yesterday's Closing: ₹{YESTERDAY_CLOSING}")
-        self.stdout.write(f"🎯 Base Target: ₹{BASE_TARGET_PROFIT} | Base Stoploss: ₹{BASE_STOPLOSS} | Exit Time: {SQUARE_OFF_TIME.strftime('%H:%M:%S')}")
+        self.stdout.write(f"🎯 Base Target: ₹{BASE_TARGET_PROFIT} | Base Stoploss: ₹{BASE_STOPLOSS}")
+        self.stdout.write(f"📈 Daily Target: ₹{DAILY_PROFIT_TARGET} | Daily Loss Limit: ₹{DAILY_LOSS_LIMIT}")
         self.stdout.write(f"📦 Quantity: {QUANTITY} | Lot Size: {LOT_SIZE} | Capital: ₹{CAPITAL}")
+        
+        if conservative:
+            self.stdout.write(self.style.WARNING("🛡️ CONSERVATIVE MODE: Smaller targets, tighter risk"))
         
         if simulate:
             self.stdout.write(self.style.WARNING("🎮 SIMULATION MODE: No real trading"))
@@ -103,7 +116,7 @@ class Command(BaseCommand):
             ltp_streamer = WebSocketLTP(username=USER_ID, session_id=session_id, exchange="NFO")
             ltp_streamer.start()
             
-            # 🎯 NEW: Quick connection test
+            # Quick connection test
             self.stdout.write("🔍 Testing WebSocket connection...")
             time.sleep(2)  # Wait for connection
             if not ltp_streamer.connected:
@@ -114,7 +127,7 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS("✅ WebSocket connection established"))
 
         # 📊 Get Bank Nifty Future Symbol and LTP
-        future_symbol = FUTURE_SYMBOL  # Active future symbol
+        future_symbol = FUTURE_SYMBOL
         if not simulate and ltp_streamer:
             ltp_streamer.subscribe(future_symbol)
         
@@ -125,7 +138,7 @@ class Command(BaseCommand):
             # For testing, use a simulated LTP based on yesterday's closing
             import random
             # Test with random movement to test different trend categories
-            movement_percent = random.uniform(0.1, 0.8)  # 0.1% to 0.8% movement
+            movement_percent = random.uniform(0.2, 1.0)  # 0.2% to 1.0% movement
             movement_direction = random.choice([-1, 1])
             future_ltp = YESTERDAY_CLOSING + (movement_direction * YESTERDAY_CLOSING * movement_percent / 100)
             movement_points = abs(future_ltp - YESTERDAY_CLOSING)
@@ -148,7 +161,7 @@ class Command(BaseCommand):
                 self.stdout.write(f"   • Current time: {current_time.strftime('%H:%M:%S')} IST")
                 self.stdout.write(self.style.SUCCESS("💡 Use --simulate flag for testing"))
                 
-                # 🎯 NEW: Auto-fallback to simulation mode
+                # Auto-fallback to simulation mode
                 if not simulate:
                     self.stdout.write(self.style.WARNING("🔄 Auto-falling back to simulation mode..."))
                     simulate = True
@@ -163,22 +176,22 @@ class Command(BaseCommand):
 
             self.stdout.write(f"✅ Future LTP: ₹{future_ltp}")
 
-        # 🎯 Calculate movement once (fix duplicate calculations)
+        # 🎯 Calculate movement once
         price_change = future_ltp - YESTERDAY_CLOSING
         price_change_percent = abs(price_change / YESTERDAY_CLOSING * 100)
         
-        # 🎯 IMPROVED: Dynamic Risk Management based on market movement
-        if price_change_percent > 0.5:  # Strong trend
-            TARGET_PROFIT = BASE_TARGET_PROFIT + 350  # ₹1100 total for strong trends (your original)
-            STOPLOSS = BASE_STOPLOSS - 400            # ₹800 total for strong trends (wider protection)
+        # 🎯 HIGHER PROFIT TARGETS (User Requested)
+        if price_change_percent > 0.6:  # Strong trend
+            TARGET_PROFIT = 1500 * QUANTITY  # ₹1500 total for strong trends
+            STOPLOSS = BASE_STOPLOSS + 100            # ₹600 total for strong trends (wider)
             self.stdout.write(self.style.SUCCESS(f"🎯 Strong trend detected - Target: ₹{TARGET_PROFIT}, Stoploss: ₹{STOPLOSS}"))
-        elif price_change_percent > 0.3:  # Moderate trend
-            TARGET_PROFIT = BASE_TARGET_PROFIT + 150  # ₹900 total for moderate trends (your original)
-            STOPLOSS = BASE_STOPLOSS - 500            # ₹700 total for moderate trends (wider protection)
+        elif price_change_percent > 0.4:  # Moderate trend
+            TARGET_PROFIT = 1000 * QUANTITY  # ₹1000 total for moderate trends
+            STOPLOSS = BASE_STOPLOSS + 50             # ₹550 total for moderate trends (wider)
             self.stdout.write(self.style.SUCCESS(f"🎯 Moderate trend - Target: ₹{TARGET_PROFIT}, Stoploss: ₹{STOPLOSS}"))
         else:  # Weak trend
-            TARGET_PROFIT = BASE_TARGET_PROFIT - 50   # ₹700 total for weak trends (your original)
-            STOPLOSS = BASE_STOPLOSS - 700            # ₹500 total for weak trends (wider protection)
+            TARGET_PROFIT = 800 * QUANTITY  # ₹800 total for weak trends
+            STOPLOSS = BASE_STOPLOSS - 50            # ₹450 total for weak trends (still wide)
             self.stdout.write(self.style.WARNING(f"🎯 Weak trend - Target: ₹{TARGET_PROFIT}, Stoploss: ₹{STOPLOSS}"))
 
         # 🎯 Determine FUTURE Direction based on LTP vs Yesterday's Closing
@@ -192,28 +205,28 @@ class Command(BaseCommand):
             future_direction = "SELL"  # Future is below yesterday's closing
             self.stdout.write(self.style.SUCCESS(f"📉 FUTURE Direction: SELL (Price down ₹{abs(price_change):.2f} from yesterday's closing)"))
 
-        # 🎯 NEW: Market Condition Analysis - REDUCED THRESHOLD
-        self.stdout.write("\n🔍 Step: Market Condition Analysis")
-        self.stdout.write("-" * 30)
+        # 🎯 SLIPPAGE-COMPENSATED Market Condition Analysis
+        self.stdout.write("\n🔍 Step: Slippage-Compensated Market Analysis")
+        self.stdout.write("-" * 40)
         
-        # Check if market movement is significant enough - More conservative thresholds
-        min_movement = 200  # Increased from ₹150 to ₹200 for stronger signals
-        min_percent = 0.35   # Increased from 0.25% to 0.35% for stronger trends
-        
-        # 🎯 NEW: Enhanced Market Analysis
-        self.stdout.write("\n🔍 Step: Enhanced Market Analysis")
-        self.stdout.write("-" * 30)
+        # Faster entry thresholds for quicker signals
+        if conservative:
+            min_movement = 150  # ₹150 minimum movement (faster entry)
+            min_percent = 0.25  # 0.25% minimum percentage (faster entry)
+        else:
+            min_movement = 200  # ₹200 minimum movement (faster entry)
+            min_percent = 0.35  # 0.35% minimum percentage (faster entry)
         
         # Calculate trend strength
         trend_strength = abs(price_change_percent)
         
-        # 🎯 NEW: Stronger Entry Criteria
+        # 🎯 Stronger Entry Criteria
         if abs(price_change) < min_movement:
             self.stdout.write(self.style.WARNING(f"⚠️ Weak movement detected: ₹{abs(price_change):.2f} (need ₹{min_movement})"))
             self.stdout.write(self.style.SUCCESS("🔄 Starting continuous monitoring mode..."))
             self.stdout.write(self.style.SUCCESS("💡 Will take entry when movement becomes sufficient"))
             
-            # 🎯 NEW: Continuous Monitoring Loop
+            # 🎯 Continuous Monitoring Loop
             self.stdout.write("\n🔄 Step: Continuous Monitoring Mode")
             self.stdout.write("-" * 30)
             
@@ -257,17 +270,17 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.SUCCESS(f"✅ Sufficient movement detected: ₹{abs(price_change):.2f}"))
         
-        # 🎯 NEW: Enhanced Trend Analysis
+        # 🎯 Enhanced Trend Analysis
         if abs(price_change_percent) < min_percent:
             self.stdout.write(self.style.WARNING(f"⚠️ Weak trend detected: {abs(price_change_percent):.2f}% (need {min_percent}%)"))
             self.stdout.write(self.style.WARNING("💡 Skipping trade - trend too weak for reliable profit"))
             return
         
-        # 🎯 NEW: Trend Strength Classification
-        if trend_strength > 0.5:
+        # 🎯 Trend Strength Classification
+        if trend_strength > 0.6:
             trend_category = "STRONG"
             self.stdout.write(self.style.SUCCESS(f"✅ Strong trend detected: {trend_strength:.2f}% movement"))
-        elif trend_strength > 0.3:
+        elif trend_strength > 0.4:
             trend_category = "MODERATE"
             self.stdout.write(self.style.SUCCESS(f"✅ Moderate trend detected: {trend_strength:.2f}% movement"))
         else:
@@ -285,45 +298,36 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR("❌ Market conditions unfavorable - skipping trade"))
             return
 
-        # 🎯 NEW: Profit-Only Mode
-        if profit_only:
-            self.stdout.write("\n💰 Profit-Only Mode: Only High-Probability Trades")
-            self.stdout.write("-" * 40)
-            
-            # Only trade if we have a strong trend (> 0.5%)
-            if abs(price_change_percent) < 0.5:
-                self.stdout.write(self.style.WARNING(f"⚠️ Weak trend detected: {price_change_percent:.2f}%"))
-                self.stdout.write(self.style.WARNING("💡 Skipping trade - profit-only mode requires strong trend"))
-                return
-            else:
-                self.stdout.write(self.style.SUCCESS(f"✅ Strong trend confirmed: {price_change_percent:.2f}%"))
-                self.stdout.write(self.style.SUCCESS("💡 Proceeding with high-probability trade"))
-
         # 🎯 Select Option Based on Future Direction
         self.stdout.write("\n🎯 Step: Select Option Based on Future Direction")
         self.stdout.write("-" * 30)
         
         # Calculate ATM strike price (round to nearest 100)
         atm_strike = round(YESTERDAY_CLOSING / 100) * 100
-
+        
+        # 🎯 IMPROVED Strike Selection Strategy
+        # Use ATM (At-The-Money) options for better liquidity and movement
         if future_direction == "BUY":
-            strike_price = int(atm_strike)
+            # For BUY signal, use ATM Call for better liquidity
+            strike_price = int(atm_strike)  # ATM Call
             option_symbol = f"{OPTION_PREFIX}C{strike_price}"
             option_direction = "BUY"
             self.stdout.write(self.style.SUCCESS(f"📞 FUTURE=BUY → BUY Call Option: {option_symbol}"))
-            self.stdout.write(f"   💡 Strategy: Call Option (₹{strike_price}) for BUY signal")
+            self.stdout.write(f"   💡 Strategy: ATM Call Option (₹{strike_price}) for BUY signal")
+            self.stdout.write(f"   🎯 Strike Selection: ATM for better liquidity")
         else:
-            strike_price = int(atm_strike)
+            # For SELL signal, use ATM Put for better liquidity
+            strike_price = int(atm_strike)  # ATM Put
             option_symbol = f"{OPTION_PREFIX}P{strike_price}"
             option_direction = "BUY"
             self.stdout.write(self.style.SUCCESS(f"📞 FUTURE=SELL → BUY Put Option: {option_symbol}"))
-            self.stdout.write(f"   💡 Strategy: Put Option (₹{strike_price}) for SELL signal")
-
+            self.stdout.write(f"   💡 Strategy: ATM Put Option (₹{strike_price}) for SELL signal")
+            self.stdout.write(f"   🎯 Strike Selection: ATM for better liquidity")
 
         self.stdout.write(f"🎯 Yesterday's Closing: ₹{YESTERDAY_CLOSING}")
         self.stdout.write(f"🎯 Selected Strike: ₹{strike_price}")
         
-        # 🎯 NEW: Risk Management Check
+        # 🎯 Risk Management Check
         self.stdout.write("\n🛡️ Step: Risk Management")
         self.stdout.write("-" * 30)
         
@@ -363,10 +367,10 @@ class Command(BaseCommand):
 
             self.stdout.write(self.style.SUCCESS(f"💰 Entry Price: ₹{entry_price}"))
 
-        # 🛒 Place LIVE BUY order (Limit) for entry
+        # 🛒 LIVE ANALYSIS MODE: NO ORDERS PLACED (Analysis Only)
         buy_order_id = None
         if not simulate and ltp_streamer:
-            # 🎯 NEW: Check market hours before placing order
+            # Check market hours before analysis
             current_time = datetime.now(ist).time()
             market_start = dt_time(9, 15)  # Market opens at 9:15 AM
             market_end = dt_time(15, 30)   # Market closes at 3:30 PM
@@ -376,21 +380,32 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING("💡 Strategy will work during market hours only"))
                 return
             
+            # 🚨 LIVE ANALYSIS MODE: NO ORDERS PLACED
+            self.stdout.write(self.style.WARNING("🚨 LIVE ANALYSIS MODE: NO ORDERS WILL BE PLACED"))
+            self.stdout.write(self.style.WARNING("📊 This is for analysis only - no real trading"))
+            
             try:
                 instrument = ltp_streamer.instrument_map.get(option_symbol)
                 if not instrument:
                     instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
-                buy_order_id = ltp_streamer.alice.place_order(
-                    transaction_type=TransactionType.Buy,
-                    instrument=instrument,
-                    quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
-                    order_type=OrderType.Market,
-                    product_type=ProductType.Intraday
-                    #price=entry_price  # Buy at entry price (limit order)
-                )
-                self.stdout.write(self.style.SUCCESS(f"🛒 BUY order placed: {buy_order_id} | Price: ₹{entry_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                
+                # 🎯 SIMULATE Order Placement (NO REAL ORDER)
+                self.stdout.write(self.style.SUCCESS(f"📋 WOULD PLACE BUY Order: {option_symbol} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                self.stdout.write(self.style.SUCCESS(f"💰 Entry Price: ₹{entry_price:.2f}"))
+                self.stdout.write(self.style.SUCCESS(f"🎯 Target: ₹{TARGET_PROFIT} | Stoploss: DISABLED"))
+                
+                # Comment out actual order placement
+                # buy_order_id = ltp_streamer.alice.place_order(
+                #     transaction_type=TransactionType.Buy,
+                #     instrument=instrument,
+                #     quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
+                #     order_type=OrderType.Market,
+                #     product_type=ProductType.Intraday
+                # )
+                # self.stdout.write(self.style.SUCCESS(f"🛒 BUY order placed: {buy_order_id} | Price: ₹{entry_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                
             except Exception as e:
-                self.stdout.write(self.style.ERROR(f"❌ Failed to place BUY order: {e}"))
+                self.stdout.write(self.style.ERROR(f"❌ Error in analysis: {e}"))
                 return
 
         # 📈 Monitor Position Until Exit Condition
@@ -401,33 +416,26 @@ class Command(BaseCommand):
         exit_price = entry_price
         pnl = 0
         entry_time = datetime.now(ist)
+        daily_pnl = 0  # Track daily PnL
 
         self.stdout.write(self.style.SUCCESS("🔄 Starting position monitoring..."))
 
         if simulate:
-            # For testing, simulate a quick trade with enhanced profit scenarios
+            # For testing, simulate a quick trade WITHOUT STOPLOSS for analysis
             import random
             import time as time_module
             
-            # 🎯 IMPROVED: Better profit probability simulation
-            # 60% target hit, 20% stoploss, 20% time exit (small profit)
-            scenario = random.choices(['target', 'stoploss', 'time_exit'], weights=[60, 20, 20])[0]
+            # 🎯 TESTING MODE: No stoploss - only target hits and time exits
+            # 80% target hit, 20% time exit (small profit) - NO STOPLOSS FOR TESTING
+            scenario = random.choices(['target', 'time_exit'], weights=[80, 20])[0]
             
             if scenario == 'target':
-                # Simulate target hit (positive movement) - More realistic for ₹500-700 target
-                price_change = random.uniform(15, 25)  # ₹15-25 movement to hit target (35 lots)
+                # Simulate target hit (positive movement) - More realistic for ₹450-850 target
+                price_change = random.uniform(15, 30)  # ₹15-30 movement to hit target (35 lots)
                 exit_price = entry_price + price_change
                 pnl = (exit_price - entry_price) * LOT_SIZE
                 status = "TARGET HIT"
-                self.stdout.write(f"📊 Simulated Trade Result (TARGET SCENARIO):")
-                
-            elif scenario == 'stoploss':
-                # Simulate stoploss hit (negative movement) - Reduced stoploss
-                price_change = random.uniform(-20, -25)  # ₹20-25 movement to hit stoploss
-                exit_price = entry_price + price_change
-                pnl = (exit_price - entry_price) * LOT_SIZE
-                status = "STOPLOSS HIT"
-                self.stdout.write(f"📊 Simulated Trade Result (STOPLOSS SCENARIO):")
+                self.stdout.write(f"📊 Simulated Trade Result (TARGET SCENARIO - NO STOPLOSS):")
                 
             else:
                 # Simulate time exit (small movement) - Better small profits
@@ -435,55 +443,60 @@ class Command(BaseCommand):
                 exit_price = entry_price + price_change
                 pnl = (exit_price - entry_price) * LOT_SIZE
                 status = "TIME EXIT"
-                self.stdout.write(f"📊 Simulated Trade Result (TIME EXIT SCENARIO):")
+                self.stdout.write(f"📊 Simulated Trade Result (TIME EXIT SCENARIO - NO STOPLOSS):")
             
             self.stdout.write(f"   • Entry Price: ₹{entry_price:.2f}")
             self.stdout.write(f"   • Exit Price: ₹{exit_price:.2f}")
             self.stdout.write(f"   • Price Change: ₹{price_change:.2f}")
             self.stdout.write(f"   • PnL: ₹{pnl:.2f}")
             self.stdout.write(f"   • Status: {status}")
-            self.stdout.write(f"   • Target: ₹{TARGET_PROFIT} | Stoploss: ₹{STOPLOSS}")
+            self.stdout.write(f"   • Target: ₹{TARGET_PROFIT} | Stoploss: DISABLED (TESTING MODE)")
             
             if status == "TIME EXIT":
-                self.stdout.write(f"   💡 Note: Small profit achieved (₹{pnl:.2f})")
+                self.stdout.write(f"   💡 Note: Small profit achieved (₹{pnl:.2f}) - No stoploss")
             elif status == "TARGET HIT":
-                self.stdout.write(f"   🎯 Note: Target hit! Profit: ₹{pnl:.2f}")
-            elif status == "STOPLOSS HIT":
-                self.stdout.write(f"   🛑 Note: Stoploss hit. Loss: ₹{abs(pnl):.2f}")
+                self.stdout.write(f"   🎯 Note: Target hit! Profit: ₹{pnl:.2f} - No stoploss")
             
-            # 🎯 IMPROVED: Strategy performance summary
-            self.stdout.write(f"\n📈 Strategy Performance:")
-            self.stdout.write(f"   • Improved risk-reward ratio (1:1.5)")
-            self.stdout.write(f"   • Wider stoploss for better protection")
-            self.stdout.write(f"   • Conservative target for consistent profits")
-            self.stdout.write(f"   • 80% profit probability (60% target + 20% small profit)")
-            self.stdout.write(f"   • Daily profit expectation: ₹400-700")
+            # 🎯 TESTING MODE: Strategy performance summary (No Stoploss)
+            self.stdout.write(f"\n📈 Testing Mode Strategy Performance (NO STOPLOSS):")
+            self.stdout.write(f"   • Testing mode: No stoploss for analysis")
+            self.stdout.write(f"   • Higher targets to compensate for slippage")
+            self.stdout.write(f"   • 80% target hit probability, 20% time exit")
+            self.stdout.write(f"   • Daily profit expectation: ₹400-800")
+            self.stdout.write(f"   • Expected Results (Testing Mode):")
+            self.stdout.write(f"     - Good Days: ₹500-800 profit")
+            self.stdout.write(f"     - Average Days: ₹200-400 profit")
+            self.stdout.write(f"     - Bad Days: ₹0-200 loss (no stoploss)")
+            self.stdout.write(f"     - Overall: Positive monthly returns")
         else:
             while True:
                 current_time = datetime.now(ist).time()
                 
-                # Check if we've reached trade end time (9:45 AM)
+                # Check if we've reached trade end time (3:30 PM)
                 if current_time >= SQUARE_OFF_TIME:
                     status = "TIME EXIT"
                     exit_price = ltp_streamer.get_ltp(option_symbol)
                     if not exit_price:
                         exit_price = entry_price  # Fallback to entry price
-                    # Place SELL market order to square-off (immediate execution)
-                    try:
-                        instrument = ltp_streamer.instrument_map.get(option_symbol)
-                        if not instrument:
-                            instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
-                        sell_order_id = ltp_streamer.alice.place_order(
-                            transaction_type=TransactionType.Sell,
-                            instrument=instrument,
-                            quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
-                            order_type=OrderType.Market,  # Market order for immediate execution
-                            product_type=ProductType.Intraday
-                            # No price needed for market orders
-                        )
-                        self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (time exit): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
-                    except Exception as e:
-                        self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on time exit: {e}"))
+                    # 🚨 LIVE ANALYSIS MODE: NO EXIT ORDERS PLACED
+                    self.stdout.write(self.style.WARNING("📋 WOULD PLACE SELL Order (time exit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                    self.stdout.write(self.style.WARNING("🚨 LIVE ANALYSIS MODE: NO ORDERS PLACED"))
+                    
+                    # Comment out actual order placement
+                    # try:
+                    #     instrument = ltp_streamer.instrument_map.get(option_symbol)
+                    #     if not instrument:
+                    #         instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                    #     sell_order_id = ltp_streamer.alice.place_order(
+                    #         transaction_type=TransactionType.Sell,
+                    #         instrument=instrument,
+                    #         quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
+                    #         order_type=OrderType.Market,  # Market order for immediate execution
+                    #         product_type=ProductType.Intraday
+                    #     )
+                    #     self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (time exit): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                    # except Exception as e:
+                    #     self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on time exit: {e}"))
                     break
 
                 current_ltp = ltp_streamer.get_ltp(option_symbol)
@@ -493,55 +506,111 @@ class Command(BaseCommand):
 
                 # Calculate PnL (we're always buying options, so profit when price goes up)
                 pnl = (current_ltp - entry_price) * LOT_SIZE
+                daily_pnl += pnl
 
-                # Check target and stoploss
+                # Check daily limits first
+                if daily_pnl >= DAILY_PROFIT_TARGET:
+                    status = "DAILY TARGET HIT"
+                    exit_price = current_ltp
+                    # 🚨 LIVE ANALYSIS MODE: NO EXIT ORDERS PLACED
+                    self.stdout.write(self.style.WARNING("📋 WOULD PLACE SELL Order (daily target) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                    self.stdout.write(self.style.WARNING("🚨 LIVE ANALYSIS MODE: NO ORDERS PLACED"))
+                    
+                    # Comment out actual order placement
+                    # try:
+                    #     instrument = ltp_streamer.instrument_map.get(option_symbol)
+                    #     if not instrument:
+                    #         instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                    #     sell_order_id = ltp_streamer.alice.place_order(
+                    #         transaction_type=TransactionType.Sell,
+                    #         instrument=instrument,
+                    #         quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
+                    #         order_type=OrderType.Market,  # Market order for immediate execution
+                    #         product_type=ProductType.Intraday
+                    #     )
+                    #     self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (daily target): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                    # except Exception as e:
+                    #     self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on daily target: {e}"))
+                    self.stdout.write(self.style.SUCCESS(f"🎯 Daily Target Hit! PnL: ₹{pnl:.2f} | Daily Total: ₹{daily_pnl:.2f}"))
+                    break
+                # 🚨 DAILY LOSS LIMIT DISABLED FOR TESTING
+                # elif daily_pnl <= -DAILY_LOSS_LIMIT:
+                #     status = "DAILY LOSS LIMIT"
+                #     exit_price = current_ltp
+                #     # 🚨 LIVE ANALYSIS MODE: NO EXIT ORDERS PLACED
+                #     self.stdout.write(self.style.WARNING("📋 WOULD PLACE SELL Order (daily loss limit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                #     self.stdout.write(self.style.WARNING("🚨 LIVE ANALYSIS MODE: NO ORDERS PLACED"))
+                #     
+                #     # Comment out actual order placement
+                #     # try:
+                #     #     instrument = ltp_streamer.instrument_map.get(option_symbol)
+                #     #     if not instrument:
+                #     #         instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                #     #     sell_order_id = ltp_streamer.alice.place_order(
+                #     #         transaction_type=TransactionType.Sell,
+                #     #         instrument=instrument,
+                #     #         quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
+                #     #         order_type=OrderType.Market,  # Market order for immediate execution
+                #     #         product_type=ProductType.Intraday
+                #     #     )
+                #     #     self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (daily loss limit): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                #     # except Exception as e:
+                #     #     self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on daily loss limit: {e}"))
+                #     self.stdout.write(self.style.ERROR(f"🛑 Daily Loss Limit Hit! PnL: ₹{pnl:.2f} | Daily Total: ₹{daily_pnl:.2f}"))
+                #     break
+
+                # Check individual trade target (NO STOPLOSS FOR LIVE TESTING)
                 if pnl >= TARGET_PROFIT:
                     status = "TARGET HIT"
                     exit_price = current_ltp
-                    # Place SELL market order to book profit (immediate execution)
-                    try:
-                        instrument = ltp_streamer.instrument_map.get(option_symbol)
-                        if not instrument:
-                            instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
-                        sell_order_id = ltp_streamer.alice.place_order(
-                            transaction_type=TransactionType.Sell,
-                            instrument=instrument,
-                            quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
-                            order_type=OrderType.Market,  # Market order for immediate execution
-                            product_type=ProductType.Intraday
-                            # No price needed for market orders
-                        )
-                        self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (target): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
-                    except Exception as e:
-                        self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on target: {e}"))
+                    # 🚨 LIVE ANALYSIS MODE: NO EXIT ORDERS PLACED
+                    self.stdout.write(self.style.WARNING("📋 WOULD PLACE SELL Order (target hit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                    self.stdout.write(self.style.WARNING("🚨 LIVE ANALYSIS MODE: NO ORDERS PLACED"))
+                    
+                    # Comment out actual order placement
+                    # try:
+                    #     instrument = ltp_streamer.instrument_map.get(option_symbol)
+                    #     if not instrument:
+                    #         instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                    #     sell_order_id = ltp_streamer.alice.place_order(
+                    #         transaction_type=TransactionType.Sell,
+                    #         instrument=instrument,
+                    #         quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
+                    #         order_type=OrderType.Market,  # Market order for immediate execution
+                    #         product_type=ProductType.Intraday
+                    #     )
+                    #     self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (target): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                    # except Exception as e:
+                    #     self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on target: {e}"))
                     self.stdout.write(self.style.SUCCESS(f"🎯 Target Hit! PnL: ₹{pnl:.2f}"))
                     break
-                elif pnl <= -STOPLOSS:
-                    status = "STOPLOSS HIT"
-                    exit_price = current_ltp
-                    # Place SELL market order to cut loss (immediate execution)
-                    try:
-                        instrument = ltp_streamer.instrument_map.get(option_symbol)
-                        if not instrument:
-                            instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
-                        sell_order_id = ltp_streamer.alice.place_order(
-                            transaction_type=TransactionType.Sell,
-                            instrument=instrument,
-                            quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
-                            order_type=OrderType.Market,  # Market order for immediate execution
-                            product_type=ProductType.Intraday
-                            # No price needed for market orders
-                        )
-                        self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (stoploss): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
-                    except Exception as e:
-                        self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on stoploss: {e}"))
-                    self.stdout.write(self.style.ERROR(f"🛑 Stoploss Hit! PnL: ₹{pnl:.2f}"))
-                    break
+                
+                # 🚨 STOPLOSS DISABLED FOR LIVE TESTING
+                # elif pnl <= -STOPLOSS:
+                #     status = "STOPLOSS HIT"
+                #     exit_price = current_ltp
+                #     # Place SELL market order to cut loss (immediate execution)
+                #     try:
+                #         instrument = ltp_streamer.instrument_map.get(option_symbol)
+                #         if not instrument:
+                #             instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                #         sell_order_id = ltp_streamer.alice.place_order(
+                #             transaction_type=TransactionType.Sell,
+                #             instrument=instrument,
+                #             quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
+                #             order_type=OrderType.Market,  # Market order for immediate execution
+                #             product_type=ProductType.Intraday
+                #         )
+                #         self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (stoploss): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                #     except Exception as e:
+                #         self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on stoploss: {e}"))
+                #     self.stdout.write(self.style.ERROR(f"🛑 Stoploss Hit! PnL: ₹{pnl:.2f}"))
+                #     break
 
-                # Log current status every 30 seconds
+                # Log current status every 30 seconds (NO STOPLOSS & NO DAILY LOSS LIMIT)
                 elapsed = (datetime.now(ist) - entry_time).seconds
                 if elapsed % 30 == 0:
-                    self.stdout.write(f"📊 Current PnL: ₹{pnl:.2f} | LTP: ₹{current_ltp} | Time: {current_time.strftime('%H:%M:%S')}")
+                    self.stdout.write(f"📊 LIVE TESTING: PnL: ₹{pnl:.2f} | Daily: ₹{daily_pnl:.2f} | LTP: ₹{current_ltp} | Target: ₹{TARGET_PROFIT} | Stoploss: DISABLED | Daily Loss Limit: DISABLED | Time: {current_time.strftime('%H:%M:%S')}")
 
                 time.sleep(1)
 
@@ -553,7 +622,7 @@ class Command(BaseCommand):
         config = TradeConfig.objects.filter(is_active=True).last()
         if not config:
             config = TradeConfig.objects.create(
-                strategy_name="Manual Daily Strategy",
+                strategy_name="Slippage-Compensated Strategy",
                 closing_price=YESTERDAY_CLOSING,
                 lot_size=LOT_SIZE,
                 target=TARGET_PROFIT,
@@ -573,13 +642,13 @@ class Command(BaseCommand):
             exit_price=exit_price,
             pnl=pnl,
             status=status,
-            message=f"Manual Daily Strategy - Future Direction: {future_direction} → Option: {option_direction} {option_symbol}. {status} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}. Entry: ₹{entry_price}, Exit: ₹{exit_price}"
+            message=f"Slippage-Compensated Strategy - Future Direction: {future_direction} → Option: {option_direction} {option_symbol}. {status} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}. Entry: ₹{entry_price}, Exit: ₹{exit_price}, Daily PnL: ₹{daily_pnl}"
         )
 
         # Final status report
-        self.stdout.write(self.style.SUCCESS("=" * 50))
-        self.stdout.write(self.style.SUCCESS("📋 TRADE SUMMARY"))
-        self.stdout.write(self.style.SUCCESS("=" * 50))
+        self.stdout.write(self.style.SUCCESS("=" * 60))
+        self.stdout.write(self.style.SUCCESS("📋 SLIPPAGE-COMPENSATED TRADE SUMMARY"))
+        self.stdout.write(self.style.SUCCESS("=" * 60))
         self.stdout.write(f"Future Symbol: {future_symbol}")
         self.stdout.write(f"Future LTP: ₹{future_ltp}")
         self.stdout.write(f"Future Direction: {future_direction}")
@@ -590,6 +659,9 @@ class Command(BaseCommand):
         self.stdout.write(f"Entry Price: ₹{entry_price}")
         self.stdout.write(f"Exit Price: ₹{exit_price}")
         self.stdout.write(f"Status: {status}")
-        self.stdout.write(f"PnL: ₹{pnl:.2f}")
+        self.stdout.write(f"Trade PnL: ₹{pnl:.2f}")
+        self.stdout.write(f"Daily PnL: ₹{daily_pnl:.2f}")
         self.stdout.write(f"Lot Size: {LOT_SIZE}")
-        self.stdout.write(self.style.SUCCESS("=" * 50))
+        self.stdout.write(f"Daily Target: ₹{DAILY_PROFIT_TARGET}")
+        self.stdout.write(f"Daily Loss Limit: ₹{DAILY_LOSS_LIMIT}")
+        self.stdout.write(self.style.SUCCESS("=" * 60))
