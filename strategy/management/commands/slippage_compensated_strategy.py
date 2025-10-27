@@ -47,8 +47,8 @@ class Command(BaseCommand):
 
         # 🎯 SLIPPAGE-COMPENSATED Strategy Settings
         CAPITAL = 30000
-        QUANTITY = 1  # 1 quantity = 35 lots
-        LOT_SIZE = int(QUANTITY * 35)  # 35 lots
+        QUANTITY = 1  # 2 quantity = 70 lots
+        LOT_SIZE = int(QUANTITY * 35)  # 70 lots
         
         # 🎯 SLIPPAGE-COMPENSATED Targets
         if conservative:
@@ -65,7 +65,7 @@ class Command(BaseCommand):
             DAILY_LOSS_LIMIT = 500              # ₹500 daily loss limit
         
         SQUARE_OFF_TIME = dt_time(15, 30)  # Exit at 3:30 PM
-        YESTERDAY_CLOSING = 58000
+        YESTERDAY_CLOSING = 57700
         FUTURE_SYMBOL = 'BANKNIFTY28OCT25F' 
         OPTION_PREFIX = 'BANKNIFTY28OCT25' 
 
@@ -479,7 +479,7 @@ class Command(BaseCommand):
                     if not exit_price:
                         exit_price = entry_price  # Fallback to entry price
                     # 🚨 LIVE ANALYSIS MODE: NO EXIT ORDERS PLACED
-                    self.stdout.write(self.style.WARNING("📋 WOULD PLACE SELL Order (time exit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                    self.stdout.write(self.style.WARNING(f"📋 WOULD PLACE SELL Order (time exit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
                     self.stdout.write(self.style.WARNING("🚨 LIVE ANALYSIS MODE: NO ORDERS PLACED"))
                     
                     # Comment out actual order placement
@@ -506,65 +506,13 @@ class Command(BaseCommand):
 
                 # Calculate PnL (we're always buying options, so profit when price goes up)
                 pnl = (current_ltp - entry_price) * LOT_SIZE
-                daily_pnl += pnl
-
-                # Check daily limits first
-                if daily_pnl >= DAILY_PROFIT_TARGET:
-                    status = "DAILY TARGET HIT"
-                    exit_price = current_ltp
-                    # 🚨 LIVE ANALYSIS MODE: NO EXIT ORDERS PLACED
-                    self.stdout.write(self.style.WARNING("📋 WOULD PLACE SELL Order (daily target) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
-                    self.stdout.write(self.style.WARNING("🚨 LIVE ANALYSIS MODE: NO ORDERS PLACED"))
-                    
-                    # Comment out actual order placement
-                    # try:
-                    #     instrument = ltp_streamer.instrument_map.get(option_symbol)
-                    #     if not instrument:
-                    #         instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
-                    #     sell_order_id = ltp_streamer.alice.place_order(
-                    #         transaction_type=TransactionType.Sell,
-                    #         instrument=instrument,
-                    #         quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
-                    #         order_type=OrderType.Market,  # Market order for immediate execution
-                    #         product_type=ProductType.Intraday
-                    #     )
-                    #     self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (daily target): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
-                    # except Exception as e:
-                    #     self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on daily target: {e}"))
-                    self.stdout.write(self.style.SUCCESS(f"🎯 Daily Target Hit! PnL: ₹{pnl:.2f} | Daily Total: ₹{daily_pnl:.2f}"))
-                    break
-                # 🚨 DAILY LOSS LIMIT DISABLED FOR TESTING
-                # elif daily_pnl <= -DAILY_LOSS_LIMIT:
-                #     status = "DAILY LOSS LIMIT"
-                #     exit_price = current_ltp
-                #     # 🚨 LIVE ANALYSIS MODE: NO EXIT ORDERS PLACED
-                #     self.stdout.write(self.style.WARNING("📋 WOULD PLACE SELL Order (daily loss limit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
-                #     self.stdout.write(self.style.WARNING("🚨 LIVE ANALYSIS MODE: NO ORDERS PLACED"))
-                #     
-                #     # Comment out actual order placement
-                #     # try:
-                #     #     instrument = ltp_streamer.instrument_map.get(option_symbol)
-                #     #     if not instrument:
-                #     #         instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
-                #     #     sell_order_id = ltp_streamer.alice.place_order(
-                #     #         transaction_type=TransactionType.Sell,
-                #     #         instrument=instrument,
-                #     #         quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
-                #     #         order_type=OrderType.Market,  # Market order for immediate execution
-                #     #         product_type=ProductType.Intraday
-                #     #     )
-                #     #     self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (daily loss limit): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
-                #     # except Exception as e:
-                #     #     self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on daily loss limit: {e}"))
-                #     self.stdout.write(self.style.ERROR(f"🛑 Daily Loss Limit Hit! PnL: ₹{pnl:.2f} | Daily Total: ₹{daily_pnl:.2f}"))
-                #     break
 
                 # Check individual trade target (NO STOPLOSS FOR LIVE TESTING)
                 if pnl >= TARGET_PROFIT:
                     status = "TARGET HIT"
                     exit_price = current_ltp
                     # 🚨 LIVE ANALYSIS MODE: NO EXIT ORDERS PLACED
-                    self.stdout.write(self.style.WARNING("📋 WOULD PLACE SELL Order (target hit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                    self.stdout.write(self.style.WARNING(f"📋 WOULD PLACE SELL Order (target hit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
                     self.stdout.write(self.style.WARNING("🚨 LIVE ANALYSIS MODE: NO ORDERS PLACED"))
                     
                     # Comment out actual order placement
