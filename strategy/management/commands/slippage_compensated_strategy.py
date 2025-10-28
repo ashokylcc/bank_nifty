@@ -65,9 +65,9 @@ class Command(BaseCommand):
             DAILY_LOSS_LIMIT = 500              # ₹500 daily loss limit
         
         SQUARE_OFF_TIME = dt_time(15, 30)  # Exit at 3:30 PM
-        YESTERDAY_CLOSING = 57700
-        FUTURE_SYMBOL = 'BANKNIFTY28OCT25F' 
-        OPTION_PREFIX = 'BANKNIFTY28OCT25' 
+        YESTERDAY_CLOSING = 58200
+        FUTURE_SYMBOL = 'BANKNIFTY25NOV25F' 
+        OPTION_PREFIX = 'BANKNIFTY25NOV25' 
 
         self.stdout.write(self.style.SUCCESS("🚀 Slippage-Compensated Bank Nifty Strategy"))
         self.stdout.write("=" * 60)
@@ -561,6 +561,9 @@ class Command(BaseCommand):
                     self.stdout.write(f"📊 LIVE TESTING: PnL: ₹{pnl:.2f} | Daily: ₹{daily_pnl:.2f} | LTP: ₹{current_ltp} | Target: ₹{TARGET_PROFIT} | Stoploss: DISABLED | Daily Loss Limit: DISABLED | Time: {current_time.strftime('%H:%M:%S')}")
 
                 time.sleep(1)
+
+        # Update daily_pnl to reflect the actual trade PnL
+        daily_pnl = pnl
 
         # 📝 Save TradeLog
         self.stdout.write("\n📝 Step: Save Trade Log")

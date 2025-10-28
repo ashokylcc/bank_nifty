@@ -57,8 +57,8 @@ class Command(BaseCommand):
         
         SQUARE_OFF_TIME = dt_time(15, 30)  # Exit at 3:30 PM
         YESTERDAY_CLOSING = 58000
-        FUTURE_SYMBOL = 'BANKNIFTY28OCT25F' 
-        OPTION_PREFIX = 'BANKNIFTY28OCT25' 
+        FUTURE_SYMBOL = 'BANKNIFTY25NOV25F' 
+        OPTION_PREFIX = 'BANKNIFTY25NOV25' 
 
         self.stdout.write(self.style.SUCCESS("🚀 Bank Nifty Future-Based Option Strategy"))
         self.stdout.write("=" * 50)
