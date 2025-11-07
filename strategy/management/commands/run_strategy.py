@@ -56,7 +56,7 @@ class Command(BaseCommand):
         BASE_STOPLOSS = 1200 * QUANTITY     # ₹1200 per lot (keeping your original stop-loss)
         
         SQUARE_OFF_TIME = dt_time(15, 30)  # Exit at 3:30 PM
-        YESTERDAY_CLOSING = 58000
+        YESTERDAY_CLOSING = 57900
         FUTURE_SYMBOL = 'BANKNIFTY25NOV25F' 
         OPTION_PREFIX = 'BANKNIFTY25NOV25' 
 
