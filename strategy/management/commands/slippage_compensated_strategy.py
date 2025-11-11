@@ -65,7 +65,7 @@ class Command(BaseCommand):
             DAILY_LOSS_LIMIT = 500              # ₹500 daily loss limit
         
         SQUARE_OFF_TIME = dt_time(15, 30)  # Exit at 3:30 PM
-        YESTERDAY_CLOSING = 57900
+        YESTERDAY_CLOSING = 58200
         FUTURE_SYMBOL = 'BANKNIFTY25NOV25F' 
         OPTION_PREFIX = 'BANKNIFTY25NOV25' 
 
@@ -447,32 +447,31 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING("💡 Strategy will work during market hours only"))
                 return
             
-            # 🚨 LIVE ANALYSIS MODE: NO ORDERS PLACED
-            self.stdout.write(self.style.WARNING("🚨 LIVE ANALYSIS MODE: NO ORDERS WILL BE PLACED"))
-            self.stdout.write(self.style.WARNING("📊 This is for analysis only - no real trading"))
+            # 🚀 LIVE TRADING MODE: REAL ORDERS WILL BE PLACED
+            self.stdout.write(self.style.SUCCESS("🚀 LIVE TRADING MODE: REAL ORDERS WILL BE PLACED"))
+            self.stdout.write(self.style.WARNING("⚠️ This will place real orders with real money"))
             
             try:
                 instrument = ltp_streamer.instrument_map.get(option_symbol)
                 if not instrument:
                     instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
                 
-                # 🎯 SIMULATE Order Placement (NO REAL ORDER)
-                self.stdout.write(self.style.SUCCESS(f"📋 WOULD PLACE BUY Order: {option_symbol} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                # 🎯 PLACE REAL ORDER
+                self.stdout.write(self.style.SUCCESS(f"📋 Placing BUY Order: {option_symbol} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
                 self.stdout.write(self.style.SUCCESS(f"💰 Entry Price: ₹{entry_price:.2f}"))
                 self.stdout.write(self.style.SUCCESS(f"🎯 Target: ₹{TARGET_PROFIT} | Stoploss: ₹{STOPLOSS}"))
                 
-                # Comment out actual order placement
-                # buy_order_id = ltp_streamer.alice.place_order(
-                #     transaction_type=TransactionType.Buy,
-                #     instrument=instrument,
-                #     quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
-                #     order_type=OrderType.Market,
-                #     product_type=ProductType.Intraday
-                # )
-                # self.stdout.write(self.style.SUCCESS(f"🛒 BUY order placed: {buy_order_id} | Price: ₹{entry_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                buy_order_id = ltp_streamer.alice.place_order(
+                    transaction_type=TransactionType.Buy,
+                    instrument=instrument,
+                    quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
+                    order_type=OrderType.Market,
+                    product_type=ProductType.Intraday
+                )
+                self.stdout.write(self.style.SUCCESS(f"🛒 BUY order placed: {buy_order_id} | Price: ₹{entry_price} | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
                 
             except Exception as e:
-                self.stdout.write(self.style.ERROR(f"❌ Error in analysis: {e}"))
+                self.stdout.write(self.style.ERROR(f"❌ Error placing order: {e}"))
                 return
 
         # 📈 Monitor Position Until Exit Condition
@@ -488,7 +487,7 @@ class Command(BaseCommand):
         drawdown_time = None  # Track when max drawdown occurred
 
         self.stdout.write(self.style.SUCCESS("🔄 Starting position monitoring..."))
-        self.stdout.write(self.style.SUCCESS("📊 Drawdown tracking enabled for testing analysis"))
+        self.stdout.write(self.style.SUCCESS("📊 Drawdown tracking enabled for live trading"))
 
         if simulate:
             # For testing, simulate trade scenarios with stoploss enabled
@@ -572,25 +571,23 @@ class Command(BaseCommand):
                     exit_price = ltp_streamer.get_ltp(option_symbol)
                     if not exit_price:
                         exit_price = entry_price  # Fallback to entry price
-                    # 🚨 LIVE ANALYSIS MODE: NO EXIT ORDERS PLACED
-                    self.stdout.write(self.style.WARNING(f"📋 WOULD PLACE SELL Order (time exit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
-                    self.stdout.write(self.style.WARNING("🚨 LIVE ANALYSIS MODE: NO ORDERS PLACED"))
+                    # 🚀 LIVE TRADING: PLACE EXIT ORDER
+                    self.stdout.write(self.style.WARNING(f"📋 Placing SELL Order (time exit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
                     
-                    # Comment out actual order placement
-                    # try:
-                    #     instrument = ltp_streamer.instrument_map.get(option_symbol)
-                    #     if not instrument:
-                    #         instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
-                    #     sell_order_id = ltp_streamer.alice.place_order(
-                    #         transaction_type=TransactionType.Sell,
-                    #         instrument=instrument,
-                    #         quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
-                    #         order_type=OrderType.Market,  # Market order for immediate execution
-                    #         product_type=ProductType.Intraday
-                    #     )
-                    #     self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (time exit): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
-                    # except Exception as e:
-                    #     self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on time exit: {e}"))
+                    try:
+                        instrument = ltp_streamer.instrument_map.get(option_symbol)
+                        if not instrument:
+                            instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                        sell_order_id = ltp_streamer.alice.place_order(
+                            transaction_type=TransactionType.Sell,
+                            instrument=instrument,
+                            quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
+                            order_type=OrderType.Market,  # Market order for immediate execution
+                            product_type=ProductType.Intraday
+                        )
+                        self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (time exit): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                    except Exception as e:
+                        self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on time exit: {e}"))
                     break
 
                 current_ltp = ltp_streamer.get_ltp(option_symbol)
@@ -613,25 +610,23 @@ class Command(BaseCommand):
                 if pnl >= TARGET_PROFIT:
                     status = "TARGET HIT"
                     exit_price = current_ltp
-                    # 🚨 LIVE ANALYSIS MODE: NO EXIT ORDERS PLACED
-                    self.stdout.write(self.style.WARNING(f"📋 WOULD PLACE SELL Order (target hit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
-                    self.stdout.write(self.style.WARNING("🚨 LIVE ANALYSIS MODE: NO ORDERS PLACED"))
+                    # 🚀 LIVE TRADING: PLACE EXIT ORDER
+                    self.stdout.write(self.style.SUCCESS(f"📋 Placing SELL Order (target hit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
                     
-                    # Comment out actual order placement
-                    # try:
-                    #     instrument = ltp_streamer.instrument_map.get(option_symbol)
-                    #     if not instrument:
-                    #         instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
-                    #     sell_order_id = ltp_streamer.alice.place_order(
-                    #         transaction_type=TransactionType.Sell,
-                    #         instrument=instrument,
-                    #         quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
-                    #         order_type=OrderType.Market,  # Market order for immediate execution
-                    #         product_type=ProductType.Intraday
-                    #     )
-                    #     self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (target): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
-                    # except Exception as e:
-                    #     self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on target: {e}"))
+                    try:
+                        instrument = ltp_streamer.instrument_map.get(option_symbol)
+                        if not instrument:
+                            instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                        sell_order_id = ltp_streamer.alice.place_order(
+                            transaction_type=TransactionType.Sell,
+                            instrument=instrument,
+                            quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
+                            order_type=OrderType.Market,  # Market order for immediate execution
+                            product_type=ProductType.Intraday
+                        )
+                        self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (target): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                    except Exception as e:
+                        self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on target: {e}"))
                     self.stdout.write(self.style.SUCCESS(f"🎯 Target Hit! PnL: ₹{pnl:.2f}"))
                     break
                 
@@ -639,25 +634,23 @@ class Command(BaseCommand):
                 elif pnl <= -STOPLOSS:
                     status = "STOPLOSS HIT"
                     exit_price = current_ltp
-                    # 🚨 LIVE ANALYSIS MODE: NO EXIT ORDERS PLACED
-                    self.stdout.write(self.style.WARNING(f"📋 WOULD PLACE SELL Order (stoploss hit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
-                    self.stdout.write(self.style.WARNING("🚨 LIVE ANALYSIS MODE: NO ORDERS PLACED"))
+                    # 🚀 LIVE TRADING: PLACE EXIT ORDER
+                    self.stdout.write(self.style.ERROR(f"📋 Placing SELL Order (stoploss hit) | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
                     
-                    # Comment out actual order placement
-                    # try:
-                    #     instrument = ltp_streamer.instrument_map.get(option_symbol)
-                    #     if not instrument:
-                    #         instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
-                    #     sell_order_id = ltp_streamer.alice.place_order(
-                    #         transaction_type=TransactionType.Sell,
-                    #         instrument=instrument,
-                    #         quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
-                    #         order_type=OrderType.Market,  # Market order for immediate execution
-                    #         product_type=ProductType.Intraday
-                    #     )
-                    #     self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (stoploss): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
-                    # except Exception as e:
-                    #     self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on stoploss: {e}"))
+                    try:
+                        instrument = ltp_streamer.instrument_map.get(option_symbol)
+                        if not instrument:
+                            instrument = ltp_streamer.alice.get_instrument_by_symbol("NFO", option_symbol)
+                        sell_order_id = ltp_streamer.alice.place_order(
+                            transaction_type=TransactionType.Sell,
+                            instrument=instrument,
+                            quantity=LOT_SIZE,  # Use LOT_SIZE for actual order quantity (35 lots)
+                            order_type=OrderType.Market,  # Market order for immediate execution
+                            product_type=ProductType.Intraday
+                        )
+                        self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (stoploss): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
+                    except Exception as e:
+                        self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on stoploss: {e}"))
                     self.stdout.write(self.style.ERROR(f"🛑 Stoploss Hit! PnL: ₹{pnl:.2f}"))
                     break
 
@@ -665,7 +658,7 @@ class Command(BaseCommand):
                 elapsed = (datetime.now(ist) - entry_time).seconds
                 if elapsed % 30 == 0:
                     drawdown_info = f"Max DD: ₹{max_drawdown:.2f}" if max_drawdown < 0 else "Max DD: ₹0.00"
-                    self.stdout.write(f"📊 LIVE TESTING: PnL: ₹{pnl:.2f} | {drawdown_info} | Daily: ₹{daily_pnl:.2f} | LTP: ₹{current_ltp} | Target: ₹{TARGET_PROFIT} | Stoploss: ₹{STOPLOSS} | Time: {current_time.strftime('%H:%M:%S')}")
+                    self.stdout.write(f"📊 LIVE TRADING: PnL: ₹{pnl:.2f} | {drawdown_info} | Daily: ₹{daily_pnl:.2f} | LTP: ₹{current_ltp} | Target: ₹{TARGET_PROFIT} | Stoploss: ₹{STOPLOSS} | Time: {current_time.strftime('%H:%M:%S')}")
 
                 time.sleep(1)
 
