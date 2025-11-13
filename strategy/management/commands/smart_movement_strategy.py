@@ -102,10 +102,10 @@ class Command(BaseCommand):
         MIN_MOMENTUM_POINTS = 20  # Minimum 20 points momentum per candle
         
         
-        YESTERDAY_CLOSING = 57800  # Update this daily
+        YESTERDAY_CLOSING = 58500  # Update this daily
 
-        FUTURE_SYMBOL = "BANKNIFTY28OCT25F"
-        OPTION_SYMBOL = "BANKNIFTY28OCT25"
+        FUTURE_SYMBOL = "BANKNIFTY25NOV25F"
+        OPTION_SYMBOL = "BANKNIFTY25NOV25"
         
         # 🎯 DAILY TRACKING VARIABLES
         daily_trade_count = 0
@@ -762,13 +762,19 @@ class Command(BaseCommand):
         self.stdout.write(f"📊 Future Movement: ₹{price_change:.2f}")
         self.stdout.write(f"🎯 Future Direction: {future_direction}")
         
+        # Extract option prefix from future symbol (remove 'F' at the end)
+        option_prefix = future_symbol.rstrip('F')
+        
+        # Calculate ATM strike (round to nearest 100)
+        atm_strike = round(yesterday_closing / 100) * 100
+        
         # Select option based on future direction
         if future_direction == "BUY":
-            option_symbol = f"OPTION_SYMBOL{int(yesterday_closing)}"
+            option_symbol = option_prefix + "C" + str(int(atm_strike))
             option_direction = "BUY"
             self.stdout.write(f"📞 FUTURE=BUY → BUY Call Option: {option_symbol}")
         else:
-            option_symbol = f"OPTION_SYMBOL{int(yesterday_closing)}"
+            option_symbol = option_prefix + "P" + str(int(atm_strike))
             option_direction = "BUY"
             self.stdout.write(f"📞 FUTURE=SELL → BUY Put Option: {option_symbol}")
         

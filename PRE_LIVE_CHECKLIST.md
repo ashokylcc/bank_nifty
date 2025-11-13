@@ -1,376 +1,153 @@
-# ✅ PRE-LIVE TRADING CHECKLIST - SLIPPAGE COMPENSATED STRATEGY
+# Pre-Live Trading Checklist
 
-**Strategy:** `slippage_compensated_strategy.py`  
-**Date:** Ready for Live Trading  
-**Daily Target:** ₹500
+**⚠️ CRITICAL: Only proceed to live trading after ALL items are checked ✅**
 
----
+## Phase 1: Backtesting ✅
 
-## 🎯 CRITICAL CHECKS BEFORE GOING LIVE
+- [ ] **Historical Data Collected**
+  - [ ] 3-12 months of 15-min BankNifty data in CSV format
+  - [ ] Data covers various market conditions (trending, ranging, volatile)
+  - [ ] Data quality verified (no gaps, correct timestamps)
 
-### 1. ✅ Configuration Verification
+- [ ] **Backtest Completed**
+  - [ ] Run: `python manage.py backtest --csv-dir historical_data/`
+  - [ ] Minimum 3 months of data processed
+  - [ ] All backtest metrics calculated
 
-#### Current Settings (Verify These):
-```python
-QUANTITY = 1                    # ✅ 1 quantity = 35 lots
-LOT_SIZE = 35                   # ✅ Correct
-YESTERDAY_CLOSING = 58200       # ⚠️ UPDATE DAILY
-FUTURE_SYMBOL = 'BANKNIFTY25NOV25F'  # ⚠️ UPDATE DAILY
-OPTION_PREFIX = 'BANKNIFTY25NOV25'   # ⚠️ UPDATE DAILY
-```
-
-#### Profit Targets (Standard Mode):
-- **Weak Trend (≥0.35%):** ₹500 profit, ₹300 stoploss
-- **Moderate Trend (>0.4%):** ₹600 profit, ₹350 stoploss
-- **Strong Trend (>0.6%):** ₹700 profit, ₹400 stoploss
-
-#### Daily Limits:
-- **Daily Profit Target:** ₹500
-- **Daily Loss Limit:** ₹500
-- **Square-Off Time:** 3:30 PM
+- [ ] **Backtest Results Acceptable**
+  - [ ] Win rate ≥ 50%
+  - [ ] Profit factor ≥ 1.5
+  - [ ] CAGR ≥ 15% (or your target)
+  - [ ] Max drawdown < 20% of capital
+  - [ ] Sharpe-like metric > 1.0
+  - [ ] Average win > 1.5 × average loss
 
 ---
 
-## 📋 DAILY PRE-MARKET CHECKLIST
+## Phase 2: Paper Trading ✅
 
-### ⏰ Before 9:15 AM (Market Open):
+- [ ] **Paper Trading Setup**
+  - [ ] Real WebSocket feed integrated (`data_ingest_live.py`)
+  - [ ] Execution adapter = Mock (dry_run=True)
+  - [ ] Slippage simulation enabled (0.1-0.4%)
+  - [ ] Commission simulation enabled
 
-1. **✅ Update Yesterday's Closing Price**
-   ```python
-   YESTERDAY_CLOSING = 58200  # Update with actual closing price
-   ```
-   - Get from NSE website or trading platform
-   - Update in `slippage_compensated_strategy.py` line 68
+- [ ] **Paper Trading Duration**
+  - [ ] Minimum 10 trading days
+  - [ ] Minimum 100 trades executed
+  - [ ] Covers different market conditions
 
-2. **✅ Update Future Symbol**
-   ```python
-   FUTURE_SYMBOL = 'BANKNIFTY25NOV25F'  # Update with current month
-   ```
-   - Check current Bank Nifty Future symbol
-   - Format: `BANKNIFTY[DD][MON][YY]F`
-   - Example: `BANKNIFTY25NOV25F` = 25th Nov 2025
-
-3. **✅ Update Option Prefix**
-   ```python
-   OPTION_PREFIX = 'BANKNIFTY25NOV25'  # Update with current month
-   ```
-   - Should match Future symbol (without 'F')
-   - Format: `BANKNIFTY[DD][MON][YY]`
-
-4. **✅ Verify API Credentials**
-   - Check `USER_ID` and `API_KEY` in `alice_client.py`
-   - Ensure credentials are valid and active
-
-5. **✅ Check Account Balance**
-   - Minimum required: ₹30,000
-   - Ensure sufficient margin for 35 lots
-
-6. **✅ Test Connection (Optional)**
-   ```bash
-   python3 manage.py slippage_compensated_strategy --simulate
-   ```
-   - Verify strategy runs without errors
-   - Check all messages display correctly
+- [ ] **Paper Trading Results**
+  - [ ] Win rate matches backtest (±5%)
+  - [ ] Average PnL matches backtest (±10%)
+  - [ ] Slippage impact understood
+  - [ ] No unexpected behavior observed
+  - [ ] System stability confirmed (no crashes, disconnects)
 
 ---
 
-## 🚀 LIVE TRADING COMMAND
+## Phase 3: Risk Management ✅
 
-### Standard Mode (Recommended):
-```bash
-python3 manage.py slippage_compensated_strategy
-```
+- [ ] **Position Sizing Verified**
+  - [ ] Qty calculation formula correct
+  - [ ] Risk per trade ≤ 1% of capital
+  - [ ] Maximum position size tested
 
-### Conservative Mode (Lower Risk):
-```bash
-python3 manage.py slippage_compensated_strategy --conservative
-```
+- [ ] **Stoploss Verified**
+  - [ ] Stoploss triggers correctly
+  - [ ] Stoploss accounts for slippage
+  - [ ] Trailing stoploss works
 
-**Note:** 
-- ✅ **NO `--simulate` flag** = LIVE TRADING
-- ⚠️ **Real orders will be placed**
-- ⚠️ **Real money will be used**
+- [ ] **Daily Limits Set**
+  - [ ] Max daily loss limit configured
+  - [ ] Max concurrent trades set
+  - [ ] Daily profit target realistic
 
----
-
-## 📊 WHAT TO EXPECT DURING LIVE TRADING
-
-### 1. Initial Setup:
-```
-🚀 Slippage-Compensated Bank Nifty Strategy
-🔐 Session login successful.
-✅ WebSocket connection established
-⏳ Waiting for Bank Nifty Future LTP...
-```
-
-### 2. Entry Conditions:
-- Strategy will monitor for:
-  - Movement ≥ ₹200
-  - Percentage ≥ 0.35%
-- Will wait until both conditions met
-
-### 3. Trade Entry:
-```
-🚀 LIVE TRADING MODE: REAL ORDERS WILL BE PLACED
-⚠️ This will place real orders with real money
-📋 Placing BUY Order: BANKNIFTY25NOV25P58200
-🛒 BUY order placed: [ORDER_ID]
-```
-
-### 4. Position Monitoring:
-```
-📊 LIVE TRADING: PnL: ₹0.00 | Max DD: ₹0.00 | Daily: ₹0.00 | LTP: ₹693.0 | Target: ₹500 | Stoploss: ₹300
-```
-
-### 5. Exit Scenarios:
-
-**Target Hit:**
-```
-🎯 Target Hit! PnL: ₹500.00
-✅ Square-off SELL placed (target): [ORDER_ID]
-```
-
-**Stoploss Hit:**
-```
-🛑 Stoploss Hit! PnL: ₹-300.00
-✅ Square-off SELL placed (stoploss): [ORDER_ID]
-```
-
-**Time Exit (3:30 PM):**
-```
-⏰ Time Exit! PnL: ₹250.00
-✅ Square-off SELL placed (time exit): [ORDER_ID]
-```
+- [ ] **Kill Switch Tested**
+  - [ ] Django Admin kill switch works
+  - [ ] Strategy stops immediately when disabled
+  - [ ] Emergency stop procedure documented
 
 ---
 
-## ⚠️ IMPORTANT WARNINGS
+## Phase 4: System Readiness ✅
 
-### 1. **Real Money Trading**
-- ⚠️ Strategy will place **REAL ORDERS**
-- ⚠️ Uses **REAL MONEY**
-- ⚠️ Losses are **REAL LOSSES**
+- [ ] **Infrastructure**
+  - [ ] Server stable (uptime > 99%)
+  - [ ] Database backups configured
+  - [ ] Logging and monitoring set up
+  - [ ] Error alerts configured
 
-### 2. **Market Hours**
-- Strategy only works: **9:15 AM - 3:30 PM IST**
-- Will not trade outside market hours
+- [ ] **Data Feed**
+  - [ ] WebSocket connection stable
+  - [ ] Reconnection logic tested
+  - [ ] Data quality verified
+  - [ ] Latency acceptable (< 100ms)
 
-### 3. **Daily Limits**
-- **Daily Loss Limit:** ₹500 (strategy will stop if reached)
-- **Daily Profit Target:** ₹500 (informational only)
-- **Max Trades:** 1 per day (single trade strategy)
-
-### 4. **Stoploss Protection**
-- Stoploss is **ENABLED** and **ACTIVE**
-- Will exit automatically if stoploss hit
-- Cannot be disabled in live mode
-
-### 5. **Symbol Updates**
-- **MUST UPDATE DAILY** before market open
-- Wrong symbols = No trades or errors
+- [ ] **Execution**
+  - [ ] Order placement tested (paper)
+  - [ ] Order cancellation works
+  - [ ] Order status tracking works
+  - [ ] Fill confirmation reliable
 
 ---
 
-## 🔍 MONITORING DURING TRADE
+## Phase 5: Final Checks ✅
 
-### What to Watch:
+- [ ] **Configuration**
+  - [ ] `DRY_RUN=false` set correctly
+  - [ ] `CONFIRM_REAL_TRADES=true` set
+  - [ ] Strategy parameters finalized
+  - [ ] Capital allocation confirmed
 
-1. **Entry Confirmation**
-   - Verify order ID received
-   - Check order status in Alice Blue app
+- [ ] **Documentation**
+  - [ ] Runbook reviewed
+  - [ ] Emergency procedures understood
+  - [ ] Support contacts available
+  - [ ] Backup plan documented
 
-2. **Position Monitoring**
-   - Watch PnL updates every 30 seconds
-   - Monitor maximum drawdown
-   - Check if approaching stoploss
-
-3. **Exit Confirmation**
-   - Verify exit order placed
-   - Check final PnL
-   - Confirm position closed
-
-4. **Daily Summary**
-   - Review trade log at end of day
-   - Check if daily target met
-   - Analyze drawdown patterns
+- [ ] **Team Readiness**
+  - [ ] All team members trained
+  - [ ] Monitoring schedule set
+  - [ ] Review meetings scheduled
+  - [ ] Escalation path clear
 
 ---
 
-## 📝 POST-TRADE CHECKLIST
+## Go-Live Decision
 
-### After Trade Completes:
+**Only proceed if:**
+- ✅ All Phase 1 items checked
+- ✅ All Phase 2 items checked
+- ✅ All Phase 3 items checked
+- ✅ All Phase 4 items checked
+- ✅ All Phase 5 items checked
+- ✅ At least 2 team members approve
+- ✅ Start with minimum capital (test allocation)
 
-1. **✅ Verify Order Execution**
-   - Check Alice Blue app for order status
-   - Confirm entry and exit prices
-   - Verify actual PnL matches strategy
-
-2. **✅ Review Trade Log**
-   - Check maximum drawdown
-   - Analyze entry/exit timing
-   - Review trend strength classification
-
-3. **✅ Update Records**
-   - Save trade summary
-   - Note any issues or observations
-   - Track daily performance
-
-4. **✅ Prepare for Next Day**
-   - Update yesterday's closing price
-   - Update symbols for next trading day
-   - Review strategy performance
+**Recommended:**
+- Start with 25% of planned capital
+- Monitor closely for first week
+- Scale up gradually if results match expectations
 
 ---
 
-## 🛡️ RISK MANAGEMENT REMINDERS
+## Post-Go-Live Monitoring
 
-### Before Each Trade:
-- ✅ Verify sufficient account balance
-- ✅ Check market conditions
-- ✅ Confirm entry criteria met
-- ✅ Review stoploss settings
+**First Week:**
+- [ ] Monitor every trade manually
+- [ ] Verify all orders execute correctly
+- [ ] Check PnL matches expectations
+- [ ] Review logs daily
+- [ ] Adjust parameters if needed
 
-### During Trade:
-- ✅ Monitor PnL regularly
-- ✅ Watch for stoploss approach
-- ✅ Be ready for manual intervention if needed
-
-### After Trade:
-- ✅ Review performance
-- ✅ Learn from results
-- ✅ Adjust if necessary
+**First Month:**
+- [ ] Weekly performance review
+- [ ] Compare live vs. backtest results
+- [ ] Identify and fix any issues
+- [ ] Document learnings
 
 ---
 
-## 🚨 EMERGENCY PROCEDURES
-
-### If Strategy Fails:
-
-1. **Connection Issues:**
-   - Strategy will auto-fallback to simulation
-   - Check internet connection
-   - Restart strategy if needed
-
-2. **Order Placement Failure:**
-   - Check Alice Blue app manually
-   - Verify account status
-   - Contact broker if needed
-
-3. **Unexpected Behavior:**
-   - Stop strategy immediately (Ctrl+C)
-   - Check position manually
-   - Exit position if needed
-
-4. **Stoploss Not Working:**
-   - Monitor position manually
-   - Exit manually if needed
-   - Report issue immediately
-
----
-
-## 📊 EXPECTED PERFORMANCE
-
-### Based on Testing:
-
-**Good Days:**
-- 1 trade, Target hit
-- Profit: ₹500-700
-- Max Drawdown: ₹0-200
-
-**Average Days:**
-- 1 trade, Target or time exit
-- Profit: ₹200-500
-- Max Drawdown: ₹100-300
-
-**Bad Days:**
-- 1 trade, Stoploss hit
-- Loss: ₹-300 to ₹-400
-- Max Drawdown: ₹300-400
-
-**Overall:**
-- Win Rate: 70-80% (based on testing)
-- Average Profit: ₹400-600 per trade
-- Monthly Target: ₹10,000-15,000
-
----
-
-## ✅ FINAL PRE-LIVE CHECKLIST
-
-### Before First Live Trade:
-
-- [ ] Updated `YESTERDAY_CLOSING` price
-- [ ] Updated `FUTURE_SYMBOL` (current month)
-- [ ] Updated `OPTION_PREFIX` (current month)
-- [ ] Verified API credentials are valid
-- [ ] Checked account balance (₹30,000+)
-- [ ] Tested strategy in simulation mode
-- [ ] Reviewed profit targets (₹500-700)
-- [ ] Reviewed stoploss settings (₹300-400)
-- [ ] Understood daily limits (₹500 loss/profit)
-- [ ] Ready to monitor during trade
-- [ ] Know how to stop strategy (Ctrl+C)
-- [ ] Have Alice Blue app ready for monitoring
-
----
-
-## 🎯 COMMAND SUMMARY
-
-### Daily Command (Live Trading):
-```bash
-cd /var/www/html/bank_nifty
-python3 manage.py slippage_compensated_strategy
-```
-
-### Test Command (Simulation):
-```bash
-python3 manage.py slippage_compensated_strategy --simulate
-```
-
-### Conservative Mode:
-```bash
-python3 manage.py slippage_compensated_strategy --conservative
-```
-
----
-
-## 📞 SUPPORT & TROUBLESHOOTING
-
-### Common Issues:
-
-1. **"No active strategy config found"**
-   - Solution: Strategy will create config automatically
-
-2. **"Unable to get Future LTP"**
-   - Check market hours (9:15 AM - 3:30 PM)
-   - Verify symbol is correct
-   - Check internet connection
-
-3. **"Login failed"**
-   - Verify API credentials
-   - Check Alice Blue account status
-   - Strategy will auto-fallback to simulation
-
-4. **"Order placement failed"**
-   - Check account balance
-   - Verify market is open
-   - Check order limits
-
----
-
-## 🎉 YOU'RE READY FOR LIVE TRADING!
-
-### Remember:
-- ✅ Update symbols daily
-- ✅ Monitor during trade
-- ✅ Trust the strategy (it's tested)
-- ✅ Review results daily
-- ✅ Stay disciplined
-
-### Good Luck! 🚀
-
----
-
-**Last Updated:** Pre-Live Checklist  
-**Strategy:** Slippage Compensated Strategy  
-**Status:** ✅ Ready for Live Trading
-
+**Last Updated:** 2025-11-13  
+**Status:** Template - Complete before going live

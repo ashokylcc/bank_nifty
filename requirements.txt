@@ -1,0 +1,8 @@
+Django>=5.2.3
+pytz>=2024.1
+python-decouple>=3.8
+psycopg2-binary>=2.9.9
+dj-database-url>=2.1.0
+alice-blue>=1.0.0
+pandas>=2.0.0
+
