@@ -183,21 +183,21 @@ class Command(BaseCommand):
         last_date = None  # Track last processed date to reset range daily
         
         # ========================================
-        # Strategy Parameters (Configurable) - OPTIMIZED
+        # Strategy Parameters (Unified - Same as Live)
         # ========================================
         TARGET_PCT = Decimal('1.5') / 100        # Target: +1.5%
-        STOPLOSS_PCT = Decimal('1.0') / 100       # Stoploss: -1.0% (widened from -0.7%)
+        STOPLOSS_PCT = Decimal('0.7') / 100       # Stoploss: -0.7%
         TRAILING_TRIGGER_PCT = Decimal('0.5') / 100  # Trailing SL triggers after +0.5%
-        LOT_SIZE = 35                             # ✅ Correct BankNifty lot size (units per lot)
+        LOT_SIZE = 35                             # ✅ BankNifty lot size (fixed)
         SQUARE_OFF_TIME = dt_time(15, 30)         # Auto exit at 3:30 PM
-        TRADE_START_TIME = dt_time(9, 30)         # Trading window start (extended from 9:30)
-        TRADE_END_TIME = dt_time(11, 0)          # Trading window end (extended to 11:00 AM for more opportunities)
+        TRADE_START_TIME = dt_time(9, 30)         # Trading window start (9:30 AM)
+        TRADE_END_TIME = dt_time(15, 30)          # Trading window end (3:30 PM - market close)
         RISK_PER_TRADE_PCT = Decimal('1.0') / 100  # Risk 1% of capital per trade
         
-        # Optimized Entry Filters (balanced - not too strict, not too loose)
-        RSI_BUY_MIN = Decimal('56')              # Balanced: 56 (between 55 and 58)
-        RSI_SELL_MAX = Decimal('44')             # Balanced: 44 (between 45 and 42)
-        EMA_GAP_REQUIRED = Decimal('0.0012')     # Balanced: 0.12% gap (between 0.1% and 0.15%)
+        # Optimized Entry Filters (very lenient to allow breakouts)
+        RSI_BUY_MIN = Decimal('55')              # Lenient: 55 (allows more BUY signals)
+        RSI_SELL_MAX = Decimal('50')             # Lenient: 50 (allows more SELL signals)
+        EMA_GAP_REQUIRED = Decimal('0.0001')     # Very lenient: 0.01% gap (allows breakouts when price action is clear, even if EMAs lag)
         
         # Strategy parameters
         stoploss_pct = STOPLOSS_PCT
@@ -248,7 +248,10 @@ class Command(BaseCommand):
                             'entry_price': entry_price,
                             'exit_price': option_exit_price,
                             'pnl': self._calculate_pnl(entry_price, option_exit_price, position_side, current_position.get('total_units', LOT_SIZE)),
-                            'reason': 'TIME'
+                            'reason': 'TIME',
+                            'lot_size': current_position.get('lot_size', LOT_SIZE),
+                            'breakout_pct': current_position.get('breakout_pct', Decimal('0.001')) * 100,
+                            'range_width': current_position.get('range_width', Decimal('0'))
                         }
                         trades.append(exit_trade)
                         self._print_exit(exit_trade)
@@ -312,20 +315,43 @@ class Command(BaseCommand):
             if len(price_samples) == 3 and not range_established and not current_position:
                 range_high = max(price_samples)
                 range_low = min(price_samples)
+                range_width = range_high - range_low
+                
+                # Calculate dynamic breakout percentage for display
+                if range_width < 40:
+                    breakout_pct = Decimal('0.0005')
+                elif 40 <= range_width <= 80:
+                    breakout_pct = Decimal('0.001')
+                else:
+                    breakout_pct = Decimal('0.0015')
+                
                 range_established = True
-                logger.debug(f"Range established on {current_date}: {range_low:.2f} - {range_high:.2f}")
+                logger.debug(f"Range established on {current_date}: {range_low:.2f} - {range_high:.2f} | Dynamic Breakout %: {breakout_pct*100:.2f}% | Range width: {range_width:.0f} pts")
             
             # Detect breakout (check every price after range is established)
-            # Only allow new entries during trading window (9:30 AM - 11:00 AM)
+            # Only allow new entries during trading window (9:30 AM - 3:30 PM)
             is_in_trading_window = (timestamp.time() >= TRADE_START_TIME and 
                                    timestamp.time() <= TRADE_END_TIME)
             
             if range_established and not current_position and is_in_trading_window:
-                # Breakout detection: price >= high * 1.001 (BUY) or <= low * 0.999 (SELL)
+                # ========================================
+                # Dynamic Breakout Logic (Same as Live)
+                # ========================================
+                range_width = range_high - range_low
+                
+                # Determine dynamic breakout percentage based on range width
+                if range_width < 40:
+                    breakout_pct = Decimal('0.0005')  # 0.05%
+                elif 40 <= range_width <= 80:
+                    breakout_pct = Decimal('0.001')   # 0.1%
+                else:  # range_width > 80
+                    breakout_pct = Decimal('0.0015')  # 0.15%
+                
+                # Breakout detection using dynamic percentage
                 breakout_signal = None
-                if futures_ltp >= range_high * Decimal('1.001'):
+                if futures_ltp >= range_high * (Decimal('1') + breakout_pct):
                     breakout_signal = "BUY"
-                elif futures_ltp <= range_low * Decimal('0.999'):
+                elif futures_ltp <= range_low * (Decimal('1') - breakout_pct):
                     breakout_signal = "SELL"
                 
                 # If breakout detected, apply momentum filters before entry
@@ -375,7 +401,10 @@ class Command(BaseCommand):
                             'strike': strike,
                             'expiry_date': expiry_date,
                             'num_lots': num_lots,
-                            'total_units': total_units
+                            'total_units': total_units,
+                            'lot_size': LOT_SIZE,
+                            'breakout_pct': breakout_pct,
+                            'range_width': range_width
                         }
                         
                         # Reset trailing stoploss to initial value on new entry
@@ -392,6 +421,9 @@ class Command(BaseCommand):
                             'reason': None,
                             'futures_ltp': futures_ltp,
                             'strike': strike,
+                            'lot_size': LOT_SIZE,
+                            'breakout_pct': breakout_pct * 100,
+                            'range_width': range_width
                         }
                         trades.append(entry_trade)
                         self._print_entry(entry_trade)
@@ -453,6 +485,9 @@ class Command(BaseCommand):
                         'pnl': self._calculate_pnl(entry_price, option_ltp, position_side, current_position.get('total_units', LOT_SIZE)),
                         'reason': exit_reason,
                         'futures_ltp': futures_ltp,
+                        'lot_size': current_position.get('lot_size', LOT_SIZE),
+                        'breakout_pct': current_position.get('breakout_pct', Decimal('0.001')) * 100,
+                        'range_width': current_position.get('range_width', Decimal('0'))
                     }
                     trades.append(exit_trade)
                     self._print_exit(exit_trade)
@@ -488,7 +523,10 @@ class Command(BaseCommand):
                 'entry_price': entry_price,
                 'exit_price': option_exit_price,
                 'pnl': self._calculate_pnl(entry_price, option_exit_price, position_side, current_position.get('total_units', LOT_SIZE)),
-                'reason': 'TIME'
+                'reason': 'TIME',
+                'lot_size': current_position.get('lot_size', LOT_SIZE),
+                'breakout_pct': current_position.get('breakout_pct', Decimal('0.001')) * 100,
+                'range_width': current_position.get('range_width', Decimal('0'))
             }
             trades.append(exit_trade)
             self._print_exit(exit_trade)
@@ -589,30 +627,34 @@ class Command(BaseCommand):
         
         return current_stoploss_pct
     
-    def _calculate_pnl(self, entry_price: Decimal, exit_price: Decimal, side: str, total_units: int = 35) -> Decimal:
+    def _calculate_pnl(self, entry_price: Decimal, exit_price: Decimal, side: str, lot_size: int = 35) -> Decimal:
         """
-        Calculate total profit/loss in ₹ for BankNifty options trade.
+        Unified P&L calculation function (same as live).
         
         Args:
             entry_price: Entry price per unit
             exit_price: Exit price per unit
             side: 'BUY_CE' or 'BUY_PE' (options are always bought)
-            total_units: Total units traded (num_lots * LOT_SIZE, default: 35 for 1 lot)
+            lot_size: Lot size (default: 35 for BankNifty)
         
         Returns:
             Decimal: Total P&L in ₹ (rounded to 2 decimal places)
         """
-        # Options are always bought, so profit when price goes up
-        pnl_per_unit = exit_price - entry_price
-        pnl_total = pnl_per_unit * Decimal(str(total_units))
-        return round(pnl_total, 2)
+        if side == "BUY_CE" or side == "BUY":
+            # CALL: profit when price goes up
+            pnl = (exit_price - entry_price) * lot_size
+        else:
+            # PUT: profit when price goes down (but we still buy, so same formula)
+            pnl = (exit_price - entry_price) * lot_size
+        return round(pnl, 2)
     
     def _print_entry(self, trade: Dict):
         """Print trade entry"""
         side_display = "CALL" if "CE" in trade['side'] else "PUT"
+        lot_size = trade.get('lot_size', 35)
         self.stdout.write(
             self.style.SUCCESS(
-                f"🚀 [BACKTEST] ENTRY {side_display} {trade['symbol']} @ ₹{trade['entry_price']:,.2f}"
+                f"🚀 [BACKTEST] ENTRY {side_display} {trade['symbol']} @ ₹{trade['entry_price']:,.2f} | Lot: {lot_size}"
             )
         )
     
@@ -620,10 +662,11 @@ class Command(BaseCommand):
         """Print trade exit"""
         side_display = "CALL" if "CE" in trade['side'] else "PUT"
         pnl_color = self.style.SUCCESS if trade['pnl'] > 0 else self.style.ERROR
+        lot_size = trade.get('lot_size', 35)
         self.stdout.write(
             pnl_color(
                 f"💰 [BACKTEST] EXIT {side_display} {trade['symbol']} @ ₹{trade['exit_price']:,.2f} | "
-                f"P&L ₹{trade['pnl']:,.2f} | Reason: {trade['reason']}"
+                f"P&L: ₹{trade['pnl']:,.2f} | Lot: {lot_size} | Reason: {trade['reason']}"
             )
         )
     

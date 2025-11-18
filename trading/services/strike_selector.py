@@ -9,7 +9,8 @@ from trading.utils.expiry_functions import (
     get_trading_thursday_expiry,
     get_available_option_expiry,
     build_option_symbol,
-    round_to_nearest_strike
+    round_to_nearest_strike,
+    extract_expiry_from_futures_symbol
 )
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,8 @@ class StrikeSelector:
     
     def select_strike(self, spot_price: Decimal, signal_type: str,
                      strong_momentum: bool = False,
-                     reference_date: Optional[date] = None) -> Tuple[str, int, date]:
+                     reference_date: Optional[date] = None,
+                     futures_symbol: Optional[str] = None) -> Tuple[str, int, date]:
         """
         Select option strike and expiry
         
@@ -34,14 +36,23 @@ class StrikeSelector:
             signal_type: 'BUY' or 'SELL'
             strong_momentum: If True, use ATM ± 100, else ATM
             reference_date: Reference date for expiry calculation (default: today)
+            futures_symbol: Optional futures symbol (e.g., 'BANKNIFTY25NOV25F') to match expiry
         
         Returns:
             Tuple of (option_symbol, strike, expiry_date)
         """
-        # Step 1: Get nearest available option expiry from contract master
-        # This queries the market to find which expiries are actually available
-        expiry_date = get_available_option_expiry(reference_date)
-        logger.info(f"Selected expiry date: {expiry_date} (from available market expiries)")
+        # Step 1: Get expiry date
+        # Priority: Use expiry from futures symbol if provided, otherwise query contract master
+        expiry_date = None
+        if futures_symbol:
+            expiry_date = extract_expiry_from_futures_symbol(futures_symbol)
+            if expiry_date:
+                logger.info(f"Using expiry from futures symbol {futures_symbol}: {expiry_date}")
+        
+        # Fallback: Get nearest available option expiry from contract master
+        if expiry_date is None:
+            expiry_date = get_available_option_expiry(reference_date)
+            logger.info(f"Selected expiry date: {expiry_date} (from available market expiries)")
         
         # Step 2: Calculate ATM strike (round to nearest 100)
         atm_strike = round_to_nearest_strike(spot_price, step=100)

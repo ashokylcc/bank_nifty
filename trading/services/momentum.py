@@ -42,7 +42,7 @@ def compute_ema(values: List[Decimal], period: int) -> Optional[Decimal]:
 
 def compute_rsi(values: List[Decimal], period: int = 14) -> Optional[Decimal]:
     """
-    Compute Relative Strength Index (RSI)
+    Compute Relative Strength Index (RSI) using Wilder's smoothing method
     
     Args:
         values: List of price values (closing prices)
@@ -57,28 +57,49 @@ def compute_rsi(values: List[Decimal], period: int = 14) -> Optional[Decimal]:
     # Calculate price changes
     changes = []
     for i in range(1, len(values)):
-        changes.append(values[i] - values[i-1])
+        change = values[i] - values[i-1]
+        changes.append(change)
     
     if len(changes) < period:
         return None
     
-    # Get recent changes
-    recent_changes = changes[-period:]
+    # Use Wilder's smoothing method (more accurate)
+    # Initial average gain and loss (first period)
+    initial_gains = [c if c > 0 else Decimal('0') for c in changes[:period]]
+    initial_losses = [-c if c < 0 else Decimal('0') for c in changes[:period]]
     
-    # Separate gains and losses
-    gains = [c if c > 0 else Decimal('0') for c in recent_changes]
-    losses = [-c if c < 0 else Decimal('0') for c in recent_changes]
+    avg_gain = sum(initial_gains) / Decimal(str(period))
+    avg_loss = sum(initial_losses) / Decimal(str(period))
     
-    # Calculate average gain and loss
-    avg_gain = sum(gains) / Decimal(str(period))
-    avg_loss = sum(losses) / Decimal(str(period))
+    # Apply Wilder's smoothing to remaining changes
+    for i in range(period, len(changes)):
+        change = changes[i]
+        gain = change if change > 0 else Decimal('0')
+        loss = -change if change < 0 else Decimal('0')
+        
+        # Wilder's smoothing: new_avg = (old_avg * (period - 1) + new_value) / period
+        avg_gain = (avg_gain * Decimal(str(period - 1)) + gain) / Decimal(str(period))
+        avg_loss = (avg_loss * Decimal(str(period - 1)) + loss) / Decimal(str(period))
     
+    # Handle edge cases
     if avg_loss == 0:
-        return Decimal('100')  # Perfect uptrend
+        # If no losses, RSI should be 100 (perfect uptrend)
+        # But only if there are actual gains
+        if avg_gain > 0:
+            return Decimal('100')
+        else:
+            # No gains, no losses - flat market, RSI = 50
+            return Decimal('50')
     
     # Calculate RS and RSI
     rs = avg_gain / avg_loss
     rsi = Decimal('100') - (Decimal('100') / (Decimal('1') + rs))
+    
+    # Clamp RSI to 0-100 range (safety check)
+    if rsi > 100:
+        rsi = Decimal('100')
+    elif rsi < 0:
+        rsi = Decimal('0')
     
     return rsi
 
@@ -149,7 +170,7 @@ class MomentumCalculator:
     
     def calculate_rsi(self, period: int = None) -> Optional[Decimal]:
         """
-        Calculate Relative Strength Index (RSI)
+        Calculate Relative Strength Index (RSI) using Wilder's smoothing method
         
         Args:
             period: RSI period (default: self.rsi_period)
@@ -165,33 +186,8 @@ class MomentumCalculator:
         
         closes = [c.close for c in self.candles]
         
-        # Calculate price changes
-        changes = []
-        for i in range(1, len(closes)):
-            changes.append(closes[i] - closes[i-1])
-        
-        if len(changes) < period:
-            return None
-        
-        # Get recent changes
-        recent_changes = changes[-period:]
-        
-        # Separate gains and losses
-        gains = [c if c > 0 else Decimal('0') for c in recent_changes]
-        losses = [-c if c < 0 else Decimal('0') for c in recent_changes]
-        
-        # Calculate average gain and loss
-        avg_gain = sum(gains) / Decimal(str(period))
-        avg_loss = sum(losses) / Decimal(str(period))
-        
-        if avg_loss == 0:
-            return Decimal('100')  # Perfect uptrend
-        
-        # Calculate RS and RSI
-        rs = avg_gain / avg_loss
-        rsi = Decimal('100') - (Decimal('100') / (Decimal('1') + rs))
-        
-        return rsi
+        # Use the standalone compute_rsi function for consistency
+        return compute_rsi(closes, period)
     
     def check_volume_breakout(self, current_volume: int, volume_multiplier: Decimal = Decimal('1.5')) -> bool:
         """

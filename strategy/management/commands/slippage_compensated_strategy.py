@@ -65,7 +65,7 @@ class Command(BaseCommand):
             DAILY_LOSS_LIMIT = 500              # ₹500 daily loss limit
         
         SQUARE_OFF_TIME = dt_time(15, 30)  # Exit at 3:30 PM
-        YESTERDAY_CLOSING = 58200
+        YESTERDAY_CLOSING = 58500
         FUTURE_SYMBOL = 'BANKNIFTY25NOV25F' 
         OPTION_PREFIX = 'BANKNIFTY25NOV25' 
 

@@ -150,11 +150,13 @@ class TradeLogAdmin(admin.ModelAdmin):
         """Display P&L with color coding"""
         if obj.pnl_value is None:
             return "-"
+        # Format the number first, then pass to format_html
+        pnl_formatted = f"{float(obj.pnl_value):.2f}"
         if obj.pnl_value > 0:
-            return format_html('<span style="color: #28a745; font-weight: bold;">₹{:.2f}</span>', obj.pnl_value)
+            return format_html('<span style="color: #28a745; font-weight: bold;">₹{}</span>', pnl_formatted)
         elif obj.pnl_value < 0:
-            return format_html('<span style="color: #dc3545; font-weight: bold;">₹{:.2f}</span>', obj.pnl_value)
-        return format_html('₹{:.2f}', obj.pnl_value)
+            return format_html('<span style="color: #dc3545; font-weight: bold;">₹{}</span>', pnl_formatted)
+        return format_html('₹{}', pnl_formatted)
     pnl_display.short_description = 'P&L'
     pnl_display.admin_order_field = 'pnl_value'
     
@@ -169,18 +171,22 @@ class TradeLogAdmin(admin.ModelAdmin):
         """Display trade duration"""
         if obj.duration_minutes is None:
             return "-"
-        hours = obj.duration_minutes // 60
-        minutes = obj.duration_minutes % 60
+        # Convert to int to ensure proper formatting
+        duration = int(obj.duration_minutes)
+        hours = duration // 60
+        minutes = duration % 60
         if hours > 0:
-            return f"{hours}h {minutes}m"
-        return f"{minutes}m"
+            return format_html("{}h {}m", hours, minutes)
+        return format_html("{}m", minutes)
     duration_display.short_description = 'Duration'
     
     def pnl_percentage_display(self, obj):
         """Display P&L percentage"""
         if obj.pnl_percentage is None:
             return "-"
-        return f"{obj.pnl_percentage:.2f}%"
+        # Format the number first, then pass to format_html
+        pct_formatted = f"{float(obj.pnl_percentage):.2f}"
+        return format_html("{}%", pct_formatted)
     pnl_percentage_display.short_description = 'P&L %'
 
 

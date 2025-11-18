@@ -254,6 +254,53 @@ def build_futures_symbol(expiry_date, underlying="BANKNIFTY"):
     return symbol
 
 
+def extract_expiry_from_futures_symbol(futures_symbol):
+    """
+    Extract expiry date from futures symbol.
+    
+    Format: BANKNIFTY{DD}{MMM}{YY}F
+    Example: BANKNIFTY25NOV25F → 2025-11-25
+    
+    Args:
+        futures_symbol: str (e.g., 'BANKNIFTY25NOV25F')
+    
+    Returns:
+        datetime.date: Expiry date or None if parsing fails
+    """
+    try:
+        if not futures_symbol or not futures_symbol.endswith('F'):
+            return None
+        
+        # Extract date part (after BANKNIFTY, before F)
+        # BANKNIFTY25NOV25F -> 25NOV25
+        date_part = futures_symbol[9:-1]  # Skip 'BANKNIFTY' and 'F'
+        
+        if len(date_part) < 6:
+            return None
+        
+        # Parse DDMMMYY format
+        day = int(date_part[:2])
+        month_str = date_part[2:5]
+        year_str = date_part[5:7]
+        
+        month_map = {
+            'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4,
+            'MAY': 5, 'JUN': 6, 'JUL': 7, 'AUG': 8,
+            'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12
+        }
+        
+        month = month_map.get(month_str.upper())
+        year = 2000 + int(year_str)
+        
+        if month:
+            expiry_date = datetime(year, month, day).date()
+            return expiry_date
+    except Exception as e:
+        logger.warning(f"Failed to extract expiry from futures symbol {futures_symbol}: {e}")
+    
+    return None
+
+
 def get_banknifty_futures_symbol(reference_date=None):
     """
     Get the active BankNifty futures symbol by querying contract master.
