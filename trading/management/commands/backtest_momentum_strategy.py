@@ -181,6 +181,7 @@ class Command(BaseCommand):
         range_low = None
         range_established = False  # Flag to track if range is established
         last_date = None  # Track last processed date to reset range daily
+        yesterday_closing_price = None  # Track yesterday's closing price for ATM strike selection
         
         # ========================================
         # Strategy Parameters (Unified - Same as Live)
@@ -222,6 +223,12 @@ class Command(BaseCommand):
             if last_date is None or current_date != last_date:
                 # New day - reset range
                 if last_date is not None:
+                    # Store yesterday's closing price (last price of previous day)
+                    # Find the last price of the previous day from data_points
+                    prev_day_prices = [dp['ltp'] for dp in data_points[:i] if dp['timestamp'].date() == last_date]
+                    if prev_day_prices:
+                        yesterday_closing_price = prev_day_prices[-1]  # Last price of previous day
+                    
                     # Close any open position from previous day
                     if current_position:
                         # Calculate option exit price using improved model
@@ -362,10 +369,17 @@ class Command(BaseCommand):
                         logger.debug(f"Momentum filters failed for {breakout_signal} signal - skipping entry")
                         continue
                     
-                    # Select option
+                    # Select option - Use yesterday's closing price for ATM strike selection
+                    strike_reference_price = futures_ltp  # Default to current futures LTP
+                    if yesterday_closing_price:
+                        strike_reference_price = yesterday_closing_price
+                        logger.debug(f"Using yesterday's closing price for ATM strike: {strike_reference_price:.2f}")
+                    else:
+                        logger.debug(f"Yesterday's closing not available. Using current futures LTP: {strike_reference_price:.2f}")
+                    
                     try:
                         option_symbol, strike, expiry_date = strike_selector.select_strike(
-                            spot_price=futures_ltp,
+                            spot_price=strike_reference_price,  # Use yesterday's closing for ATM strike
                             signal_type=breakout_signal,
                             strong_momentum=False,
                             reference_date=timestamp.date()

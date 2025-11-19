@@ -891,8 +891,20 @@ class Command(BaseCommand):
             # Select option symbol based on breakout signal
             # BUY breakout → Buy ATM CALL (CE)
             # SELL breakout → Buy ATM PUT (PE)
+            # Use yesterday's closing price for ATM strike selection
+            strike_reference_price = futures_ltp  # Default to current futures LTP
+            if strategy.yesterday_closing_price:
+                strike_reference_price = Decimal(str(strategy.yesterday_closing_price))
+                self.stdout.write(self.style.SUCCESS(
+                    f"📊 Using yesterday's closing price for ATM strike: ₹{strike_reference_price:,.2f}"
+                ))
+            else:
+                self.stdout.write(self.style.WARNING(
+                    f"⚠️  Yesterday's closing price not set in strategy. Using current futures LTP: ₹{strike_reference_price:,.2f}"
+                ))
+            
             option_symbol, strike, expiry_date = self.strike_selector.select_strike(
-                spot_price=futures_ltp,
+                spot_price=strike_reference_price,  # Use yesterday's closing for ATM strike
                 signal_type=breakout_signal,
                 strong_momentum=False,  # Use ATM for simplicity
                 futures_symbol=futures_symbol  # Pass futures symbol to match expiry

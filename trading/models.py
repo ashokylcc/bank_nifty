@@ -71,6 +71,12 @@ class Strategy(models.Model):
     trade_end_time = models.TimeField(default="10:30:00", help_text="Trading window end (recommended: 10:30 AM)")
     square_off_time = models.TimeField(default="14:45:00", help_text="Square-off time (recommended: 2:45 PM)")
     
+    # Reference price for strike selection
+    yesterday_closing_price = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text="Yesterday's futures closing price (used for ATM strike selection)"
+    )
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     

@@ -10,7 +10,7 @@ from trading.models import Strategy, Signal, Order, TradeLog, DailyStats
 @admin.register(Strategy)
 class StrategyAdmin(admin.ModelAdmin):
     """Admin interface for Strategy"""
-    list_display = ['name', 'enabled', 'capital', 'risk_per_trade_pct', 'max_daily_loss', 'created_at']
+    list_display = ['name', 'enabled', 'capital', 'risk_per_trade_pct', 'max_daily_loss', 'yesterday_closing_price', 'created_at']
     list_filter = ['enabled', 'created_at']
     search_fields = ['name']
     readonly_fields = ['created_at', 'updated_at']
@@ -33,6 +33,10 @@ class StrategyAdmin(admin.ModelAdmin):
         ('Time Windows', {
             'fields': ('range_start_time', 'range_end_time', 'trade_start_time',
                       'trade_end_time', 'square_off_time')
+        }),
+        ('Reference Price', {
+            'fields': ('yesterday_closing_price',),
+            'description': "Yesterday's futures closing price (used for ATM strike selection)"
         }),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at'),
