@@ -389,19 +389,9 @@ class Command(BaseCommand):
                         # For ATM options, approximate price as 0.2% of futures (rough estimate)
                         option_entry_price = futures_ltp * Decimal('0.002')  # Rough estimate: 0.2% of futures
                         
-                        # Calculate position size based on capital and risk
-                        # Risk amount = capital * risk_per_trade_pct
-                        risk_amount = capital * RISK_PER_TRADE_PCT
-                        # Stoploss per unit = entry_price * stoploss_pct
-                        stoploss_per_unit = option_entry_price * stoploss_pct
-                        # Risk per lot = stoploss_per_unit * LOT_SIZE
-                        risk_per_lot = stoploss_per_unit * LOT_SIZE
-                        # Number of lots = risk_amount / risk_per_lot (rounded down)
-                        if risk_per_lot > 0:
-                            num_lots = int(risk_amount / risk_per_lot)
-                            num_lots = max(1, num_lots)  # Minimum 1 lot
-                        else:
-                            num_lots = 1
+                        # Use fixed number of lots (default: 1 lot)
+                        # User can configure this in Strategy model, but for backtest we use 1 lot by default
+                        num_lots = 1  # Fixed: Start with 1 lot, user can change in Strategy model if needed
                         
                         # Total units = num_lots * LOT_SIZE
                         total_units = num_lots * LOT_SIZE

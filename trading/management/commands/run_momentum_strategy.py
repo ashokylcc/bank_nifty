@@ -284,6 +284,9 @@ class Command(BaseCommand):
         self.current_position = None
         self.current_stoploss_pct = STOPLOSS_PCT  # Dynamic stoploss (for trailing)
         self.position_just_entered = False  # Flag to skip exit checks in the same cycle as entry
+        self.last_trade_exit_time = None  # Track when last trade exited (for cooldown)
+        # Get cooldown period from strategy config (default: 5 minutes)
+        self.trade_cooldown_minutes = getattr(strategy, 'trade_cooldown_minutes', 5)
         
         # Store optimized filter parameters as instance variables (so they can be used in _check_momentum_filters)
         self.rsi_buy_min = RSI_BUY_MIN
@@ -301,6 +304,9 @@ class Command(BaseCommand):
         from trading.services.strike_selector import StrikeSelector
         self.strike_selector = StrikeSelector()
         self.option_ltp_cache = {}  # Track option LTPs: {symbol: ltp}
+        
+        # Restore open position from database if exists
+        self._restore_open_position(strategy)
         
         try:
             if once_mode or (simulate and not loop_mode):
@@ -366,7 +372,7 @@ class Command(BaseCommand):
                             # Exit loop gracefully
                             break
                         
-                        # Get latest Futures LTP from WebSocket (for momentum detection)
+                        # Get latest Futures LTP from WebSocket (always track futures)
                         futures_ltp = self._get_latest_ltp(engine)
                         
                         if futures_ltp:
@@ -430,7 +436,20 @@ class Command(BaseCommand):
                             
                             # Check for breakout if range is established and no current position
                             # Detect breakouts anytime (for monitoring), but only execute trades during trading window
-                            if self.range_established and not self.current_position:
+                            # Also check if cooldown period has passed since last trade exit
+                            cooldown_passed = True
+                            if self.last_trade_exit_time:
+                                time_since_exit = current_time_ist - self.last_trade_exit_time
+                                cooldown_seconds = self.trade_cooldown_minutes * 60
+                                if time_since_exit.total_seconds() < cooldown_seconds:
+                                    cooldown_passed = False
+                                    remaining_seconds = int(cooldown_seconds - time_since_exit.total_seconds())
+                                    if cycle_count % 12 == 0:  # Log every 12 cycles (~1 minute)
+                                        self.stdout.write(self.style.WARNING(
+                                            f"⏸️  Cooldown active: {remaining_seconds}s remaining before next trade allowed"
+                                        ))
+                            
+                            if self.range_established and not self.current_position and cooldown_passed:
                                 # ========================================
                                 # Dynamic Breakout Logic
                                 # ========================================
@@ -546,10 +565,46 @@ class Command(BaseCommand):
                                             # Get current stoploss (may have been updated by trailing logic)
                                             current_stoploss = Decimal(str(self.current_stoploss_pct))
                                             
+                                            # Calculate stoploss price for direct comparison (more accurate)
+                                            if "CE" in position_side:  # BUY CALL - stoploss when price goes down
+                                                stoploss_price = entry_price * (Decimal('1') - current_stoploss)
+                                                price_below_stoploss = option_ltp <= stoploss_price
+                                            else:  # BUY PUT - stoploss when price goes up (PUT loses value when underlying goes up)
+                                                stoploss_price = entry_price * (Decimal('1') - current_stoploss)
+                                                price_below_stoploss = option_ltp <= stoploss_price
+                                            
                                             # Check exit conditions
+                                            # Add detailed logging for debugging (log every cycle when close to target)
+                                            target_price = entry_price * (Decimal('1') + Decimal(str(self.target_pct)))
+                                            is_close_to_target = option_ltp >= target_price * Decimal('0.99')  # Within 1% of target
+                                            
+                                            if cycle_count % 6 == 0 or is_close_to_target:  # Log every 6 cycles or when close to target
+                                                logger.info(
+                                                    f"Exit check: Entry=₹{entry_price:.2f}, Current=₹{option_ltp:.2f}, "
+                                                    f"Target=₹{target_price:.2f}, P&L%={pnl_pct*100:.2f}%, "
+                                                    f"Target%={self.target_pct*100:.2f}%, Stoploss%={current_stoploss*100:.2f}%"
+                                                )
+                                                # Also print to console when close to target
+                                                if is_close_to_target:
+                                                    self.stdout.write(self.style.WARNING(
+                                                        f"🎯 Close to TARGET: Current ₹{option_ltp:.2f} | Target ₹{target_price:.2f} | P&L% {pnl_pct*100:.2f}%"
+                                                    ))
+                                            
                                             if pnl_pct >= Decimal(str(self.target_pct)):
+                                                logger.info(f"✅ TARGET HIT: P&L%={pnl_pct*100:.2f}% >= Target%={self.target_pct*100:.2f}%")
+                                                self.stdout.write(self.style.SUCCESS(
+                                                    f"🎯 TARGET REACHED! Exiting at ₹{option_ltp:.2f} (Entry: ₹{entry_price:.2f}, Profit: {pnl_pct*100:.2f}%)"
+                                                ))
                                                 self._simulate_exit(option_ltp, "TARGET", engine)
-                                            elif pnl_pct <= -current_stoploss:
+                                            elif pnl_pct <= -current_stoploss or price_below_stoploss:
+                                                # Log stoploss details for debugging
+                                                logger.info(
+                                                    f"Stoploss triggered: Entry=₹{entry_price:.2f}, "
+                                                    f"Stoploss Price=₹{stoploss_price:.2f}, "
+                                                    f"Current=₹{option_ltp:.2f}, "
+                                                    f"P&L%={pnl_pct*100:.2f}%, "
+                                                    f"Stoploss%={current_stoploss*100:.2f}%"
+                                                )
                                                 self._simulate_exit(option_ltp, "STOPLOSS", engine)
                                             # Time-based exit (square-off time) - only if we're past square-off time
                                             elif current_time_ist.time() >= strategy.square_off_time:
@@ -1044,12 +1099,8 @@ class Command(BaseCommand):
                 ema_gap_pct = ((ema5 - ema20) / ema20 * 100) if ema20 > 0 else Decimal('0')
                 momentum_info = f" | RSI: {rsi:.1f} | EMA5: ₹{ema5:,.2f} | EMA20: ₹{ema20:,.2f} | Gap: {ema_gap_pct:.2f}%"
         
-        # Calculate position size and risk
-        risk_amount = Decimal(str(self.capital)) * Decimal(str(self.stoploss_pct))
-        stoploss_per_unit = option_ltp * Decimal(str(self.stoploss_pct))
-        risk_per_lot = stoploss_per_unit * Decimal(str(self.lot_size))
-        num_lots = int(risk_amount / risk_per_lot) if risk_per_lot > 0 else 1
-        num_lots = max(1, num_lots)
+        # Use fixed number of lots from strategy configuration (default: 1 lot)
+        num_lots = strategy.num_lots if hasattr(strategy, 'num_lots') and strategy.num_lots else 1
         total_units = num_lots * self.lot_size
         total_investment = option_ltp * Decimal(str(total_units))
         
@@ -1104,8 +1155,9 @@ class Command(BaseCommand):
             "time": entry_time,
             "entry_time": entry_time,
             "trade_log_id": getattr(self, 'trade_log_id', None),  # Store for exit update
-            "total_units": total_units,  # Store total units for P&L calculation
-            "num_lots": num_lots  # Store number of lots
+            "total_units": total_units,  # Store total units for P&L calculation (num_lots * lot_size)
+            "num_lots": num_lots,  # Store number of lots
+            "lot_size": lot_size  # Store lot_size for reference
         }
         
         # Reset trailing stoploss to initial value on new entry
@@ -1117,8 +1169,49 @@ class Command(BaseCommand):
         # Log to CSV
         self._log_trade_entry(position_side, option_symbol, option_ltp, futures_ltp, strike, entry_time)
         
-        # Save to TradeLog model
-        self._save_trade_log_entry(position_side, option_symbol, option_ltp, futures_ltp, strike, expiry_date, entry_time, strategy)
+        # Save to TradeLog model (pass total_units to store as entry_quantity)
+        self._save_trade_log_entry(position_side, option_symbol, option_ltp, futures_ltp, strike, expiry_date, entry_time, strategy, total_units)
+    
+    def _restore_open_position(self, strategy):
+        """Restore open position from database if strategy was restarted"""
+        try:
+            # Find the most recent open trade for this strategy
+            open_trade = TradeLog.objects.filter(
+                strategy=strategy,
+                is_open=True
+            ).order_by('-entry_time').first()
+            
+            if open_trade:
+                # Calculate total units
+                num_lots = getattr(strategy, 'num_lots', 1)
+                lot_size = open_trade.entry_quantity or self.lot_size
+                total_units = lot_size * num_lots
+                
+                # Restore position from database
+                self.current_position = {
+                    "side": open_trade.entry_side,
+                    "symbol": open_trade.entry_symbol,
+                    "entry_price": float(open_trade.entry_price),
+                    "strike": open_trade.strike,
+                    "expiry_date": open_trade.expiry_date,
+                    "total_units": total_units,
+                    "lot_size": lot_size,
+                    "num_lots": num_lots,
+                    "entry_time": open_trade.entry_time,
+                    "trade_log_id": open_trade.id
+                }
+                self.position_just_entered = False  # Don't skip exit checks for restored position
+                
+                self.stdout.write(self.style.SUCCESS(
+                    f"🔄 Restored open position: {open_trade.entry_symbol} @ ₹{open_trade.entry_price} "
+                    f"(Entry: {open_trade.entry_time.strftime('%H:%M:%S')})"
+                ))
+                logger.info(f"Restored open position: {open_trade.entry_symbol} @ ₹{open_trade.entry_price}")
+            else:
+                self.current_position = None
+        except Exception as e:
+            logger.error(f"Error restoring open position: {e}")
+            self.current_position = None
     
     def _calculate_pnl(self, entry_price: Decimal, exit_price: Decimal, side: str, lot_size: int = 35) -> Decimal:
         """
@@ -1151,12 +1244,22 @@ class Command(BaseCommand):
         exit_price = Decimal(str(option_ltp))
         option_symbol = entry.get("symbol", "UNKNOWN")
         position_side = entry.get("side", "BUY_CE")
+        
+        # Get total_units from position (num_lots * lot_size)
         total_units = entry.get("total_units", self.lot_size)
+        if not total_units or total_units <= 0:
+            # Fallback: use num_lots and lot_size if total_units is missing
+            num_lots = entry.get("num_lots", 1)
+            lot_size = entry.get("lot_size", self.lot_size)
+            total_units = num_lots * lot_size
+        
+        # Ensure total_units is valid
+        if total_units <= 0:
+            logger.warning(f"Invalid total_units: {total_units}, using default lot_size: {self.lot_size}")
+            total_units = self.lot_size
         
         # Calculate P&L using unified function (use total_units from position)
-        total_units = entry.get("total_units", self.lot_size)
-        # Use total_units for P&L calculation (which is num_lots * lot_size)
-        pnl_value = self._calculate_pnl(entry_price, exit_price, position_side, total_units)
+        pnl_value = self._calculate_pnl(entry_price, exit_price, position_side, int(total_units))
         
         # Get lot_size for display
         lot_size = entry.get('lot_size', self.lot_size)
@@ -1172,8 +1275,17 @@ class Command(BaseCommand):
         # Determine mode (LIVE or DRY-RUN)
         mode = "LIVE" if os.getenv('DRY_RUN', 'true').lower() != 'true' else "DRY-RUN"
         
+        # Calculate stoploss price for display (if STOPLOSS reason)
+        stoploss_info = ""
+        if reason == "STOPLOSS":
+            stoploss_pct = Decimal(str(self.stoploss_pct))
+            stoploss_price = entry_price * (Decimal('1') - stoploss_pct)
+            slippage = exit_price - stoploss_price
+            slippage_pct = (slippage / stoploss_price * 100) if stoploss_price > 0 else Decimal('0')
+            stoploss_info = f" | Stoploss Price: ₹{stoploss_price:,.2f} | Slippage: ₹{slippage:,.2f} ({slippage_pct:+.2f}%)"
+        
         self.stdout.write(self.style.SUCCESS(
-            f"💰 [{mode}] EXIT {display_side} @ ₹{exit_price:,.2f} | P&L: ₹{pnl_value:,.2f} | Lot: {lot_size} | Reason: {reason}"
+            f"💰 [{mode}] EXIT {display_side} @ ₹{exit_price:,.2f} | P&L: ₹{pnl_value:,.2f} | Lot: {lot_size} | Reason: {reason}{stoploss_info}"
         ))
         if current_futures_ltp:
             self.stdout.write(self.style.SUCCESS(
@@ -1189,12 +1301,17 @@ class Command(BaseCommand):
         self.current_position = None
         self.position_just_entered = False  # Reset flag when position is closed
         
+        # Record exit time for cooldown period
+        self.last_trade_exit_time = exit_time
+        
         # Reset range for next trade opportunity
         self.range_established = False
         self.range_high = None
         self.range_low = None
         self.price_samples = []  # Reset price samples for new range detection
-        self.stdout.write(self.style.SUCCESS("🔄 Range reset - ready for next trade opportunity"))
+        self.stdout.write(self.style.SUCCESS(
+            f"🔄 Range reset - Cooldown period: {self.trade_cooldown_minutes} minutes before next trade allowed"
+        ))
     
     def _log_trade_entry(self, position_side, option_symbol, option_ltp, futures_ltp, strike, entry_time):
         """Log option trade entry to CSV"""
@@ -1268,20 +1385,23 @@ class Command(BaseCommand):
         except Exception as e:
             logger.warning(f"Error logging trade exit: {e}")
     
-    def _save_trade_log_entry(self, position_side, option_symbol, option_ltp, futures_ltp, strike, expiry_date, entry_time, strategy):
+    def _save_trade_log_entry(self, position_side, option_symbol, option_ltp, futures_ltp, strike, expiry_date, entry_time, strategy, total_units=None):
         """Save trade entry to TradeLog model"""
         try:
             # Determine if this is a dry-run
             dry_run = os.getenv('DRY_RUN', 'true').lower() == 'true'
             
+            # Use total_units if provided, otherwise fallback to lot_size
+            entry_quantity = total_units if total_units else self.lot_size
+            
             # Create TradeLog entry
             trade_log = TradeLog.objects.create(
                 strategy=strategy,
                 entry_time=entry_time,
-                entry_price=option_ltp,
+                entry_price=option_ltp,  # Store entry price
                 entry_symbol=option_symbol,
                 entry_side=position_side,
-                entry_quantity=self.lot_size,
+                entry_quantity=entry_quantity,  # Store total_units (num_lots * lot_size)
                 strike=strike,
                 expiry_date=expiry_date,
                 futures_ltp_entry=futures_ltp,
@@ -1337,23 +1457,29 @@ class Command(BaseCommand):
             }
             mapped_reason = exit_reason_map.get(reason, 'MANUAL')
             
-            # Calculate P&L points
-            entry_price = Decimal(str(entry["entry_price"]))
-            exit_price_decimal = Decimal(str(exit_price))
-            pnl_points = exit_price_decimal - entry_price
-            
             # Update TradeLog
             trade_log = TradeLog.objects.get(id=trade_log_id)
+            
+            # Use database entry_price for accurate pnl_points calculation
+            db_entry_price = Decimal(str(trade_log.entry_price))
+            exit_price_decimal = Decimal(str(exit_price))
+            pnl_points = exit_price_decimal - db_entry_price
+            
+            # Use database entry_quantity for P&L calculation (for consistency)
+            # Recalculate pnl_value using database entry_quantity to ensure accuracy
+            db_entry_quantity = trade_log.entry_quantity or self.lot_size
+            recalculated_pnl_value = pnl_points * db_entry_quantity
+            
             trade_log.exit_time = exit_time
-            trade_log.exit_price = exit_price_decimal
+            trade_log.exit_price = exit_price_decimal  # Update exit price
             trade_log.exit_reason = mapped_reason
             trade_log.pnl_points = pnl_points
-            trade_log.pnl_value = Decimal(str(pnl_value))
+            trade_log.pnl_value = recalculated_pnl_value  # Use recalculated P&L for consistency
             trade_log.futures_ltp_exit = current_futures_ltp if current_futures_ltp else None
             trade_log.is_open = False
             trade_log.save()
             
-            logger.info(f"✅ TradeLog exit updated: ID={trade_log_id}, P&L=₹{pnl_value:,.2f}, Reason={mapped_reason}")
+            logger.info(f"✅ TradeLog exit updated: ID={trade_log_id}, P&L=₹{recalculated_pnl_value:,.2f}, Reason={mapped_reason}")
         except TradeLog.DoesNotExist:
             logger.warning(f"TradeLog ID {trade_log_id} not found for exit update")
         except Exception as e:

@@ -32,6 +32,11 @@ class Strategy(models.Model):
     
     # Trading parameters
     lot_size = models.IntegerField(default=35, help_text="Lot size for BankNifty options")
+    num_lots = models.IntegerField(
+        default=1, 
+        validators=[MinValueValidator(1)],
+        help_text="Number of lots to trade (start with 1, increase as needed)"
+    )
     tick_value = models.DecimalField(
         max_digits=10, decimal_places=2, default=Decimal('1.00'),
         help_text="Point value per lot (default: 1 for options)"
@@ -70,6 +75,11 @@ class Strategy(models.Model):
     trade_start_time = models.TimeField(default="09:30:00", help_text="Trading window start (recommended: 9:30 AM)")
     trade_end_time = models.TimeField(default="10:30:00", help_text="Trading window end (recommended: 10:30 AM)")
     square_off_time = models.TimeField(default="14:45:00", help_text="Square-off time (recommended: 2:45 PM)")
+    trade_cooldown_minutes = models.IntegerField(
+        default=5, 
+        validators=[MinValueValidator(0), MaxValueValidator(60)],
+        help_text="Cooldown period in minutes after trade exit before allowing new entry (recommended: 5 minutes)"
+    )
     
     # Reference price for strike selection
     yesterday_closing_price = models.DecimalField(

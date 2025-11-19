@@ -10,7 +10,7 @@ from trading.models import Strategy, Signal, Order, TradeLog, DailyStats
 @admin.register(Strategy)
 class StrategyAdmin(admin.ModelAdmin):
     """Admin interface for Strategy"""
-    list_display = ['name', 'enabled', 'capital', 'risk_per_trade_pct', 'max_daily_loss', 'yesterday_closing_price', 'created_at']
+    list_display = ['name', 'enabled', 'capital', 'risk_per_trade_pct', 'max_daily_loss', 'num_lots', 'yesterday_closing_price', 'created_at']
     list_filter = ['enabled', 'created_at']
     search_fields = ['name']
     readonly_fields = ['created_at', 'updated_at']
@@ -23,7 +23,7 @@ class StrategyAdmin(admin.ModelAdmin):
             'fields': ('capital', 'risk_per_trade_pct', 'max_daily_loss', 'max_concurrent_trades')
         }),
         ('Trading Parameters', {
-            'fields': ('lot_size', 'tick_value', 'breakout_buffer', 'min_stoploss_points',
+            'fields': ('lot_size', 'num_lots', 'tick_value', 'breakout_buffer', 'min_stoploss_points',
                       'stoploss_range_multiplier', 'target_multiplier')
         }),
         ('Momentum Parameters', {
@@ -32,7 +32,7 @@ class StrategyAdmin(admin.ModelAdmin):
         }),
         ('Time Windows', {
             'fields': ('range_start_time', 'range_end_time', 'trade_start_time',
-                      'trade_end_time', 'square_off_time')
+                      'trade_end_time', 'square_off_time', 'trade_cooldown_minutes')
         }),
         ('Reference Price', {
             'fields': ('yesterday_closing_price',),
