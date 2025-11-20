@@ -15,6 +15,9 @@ from trading.models import Strategy, TradeLog
 from trading.services.strategy_engine import StrategyEngine
 from trading.services.concurrency_guard import ConcurrencyGuard
 from trading.services.data_ingest_live import LiveDataIngestService
+from trading.services.candle_aggregator import CandleAggregator
+from trading.services.heikin_ashi import HeikinAshiCalculator
+from trading.services.super_trend import SuperTrendCalculator
 from trading.utils.time_helpers import get_ist_now
 
 logger = logging.getLogger(__name__)
@@ -262,18 +265,28 @@ class Command(BaseCommand):
         # ========================================
         # Strategy Parameters (Unified - Same as Backtest)
         # ========================================
-        TARGET_PCT = Decimal('1.5') / 100        # Target: +1.5%
-        STOPLOSS_PCT = Decimal('0.7') / 100       # Stoploss: -0.7%
+        # ✅ IMPROVED: Wider stoploss (1.2%) and target set to 60 points
+        # Target: 60 points profit (approximately 0.1% of BankNifty price)
+        TARGET_POINTS = Decimal('60')             # Target: 60 points profit
+        TARGET_PCT = Decimal('0.1') / 100         # Approximate percentage (will be calculated dynamically)
+        STOPLOSS_PCT = Decimal('1.2') / 100       # Stoploss: -1.2% (wider to reduce premature exits)
         TRAILING_TRIGGER_PCT = Decimal('0.5') / 100  # Trailing SL triggers after +0.5%
         LOT_SIZE = 35                             # ✅ BankNifty lot size (fixed)
         SQUARE_OFF_TIME = dt_time(15, 30)         # Auto exit at 3:30 PM
         TRADE_START_TIME = dt_time(9, 30)         # Trading window start (9:30 AM)
         TRADE_END_TIME = dt_time(15, 30)          # Trading window end (3:30 PM - market close)
         
-        # Optimized Entry Filters (very lenient to allow breakouts)
-        RSI_BUY_MIN = Decimal('55')              # Lenient: 55 (allows more BUY signals)
-        RSI_SELL_MAX = Decimal('50')             # Lenient: 50 (allows more SELL signals)
+        # ✅ IMPROVED: Better entry filters (RSI > 50 for BUY, < 50 for SELL)
+        # Use values from strategy if available, otherwise use defaults
+        RSI_BUY_MIN = Decimal(str(strategy.rsi_buy_min)) if hasattr(strategy, 'rsi_buy_min') and strategy.rsi_buy_min else Decimal('50')
+        RSI_BUY_MAX = Decimal(str(strategy.rsi_buy_max)) if hasattr(strategy, 'rsi_buy_max') and strategy.rsi_buy_max else Decimal('70')
+        RSI_SELL_MIN = Decimal(str(strategy.rsi_sell_min)) if hasattr(strategy, 'rsi_sell_min') and strategy.rsi_sell_min else Decimal('30')
+        RSI_SELL_MAX = Decimal(str(strategy.rsi_sell_max)) if hasattr(strategy, 'rsi_sell_max') and strategy.rsi_sell_max else Decimal('50')
         EMA_GAP_REQUIRED = Decimal('0.0001')     # Very lenient: 0.01% gap (allows breakouts when price action is clear, even if EMAs lag)
+        
+        # ✅ NEW: Time-based exit parameters
+        TIME_EXIT_MINUTES = 12                    # Exit if trade is older than 12 minutes and profit < threshold
+        TIME_EXIT_PROFIT_THRESHOLD = Decimal('0.3') / 100  # If profit < 0.3% after 12 minutes, exit
         
         # Simplified momentum breakout parameters
         self.capital = float(strategy.capital)
@@ -290,10 +303,28 @@ class Command(BaseCommand):
         
         # Store optimized filter parameters as instance variables (so they can be used in _check_momentum_filters)
         self.rsi_buy_min = RSI_BUY_MIN
+        self.rsi_buy_max = RSI_BUY_MAX  # ✅ NEW: Upper limit to avoid overbought entries
+        self.rsi_sell_min = RSI_SELL_MIN  # ✅ NEW: Lower limit to avoid oversold entries
         self.rsi_sell_max = RSI_SELL_MAX
         self.ema_gap_required = EMA_GAP_REQUIRED
         self.trade_start_time = TRADE_START_TIME
         self.trade_end_time = TRADE_END_TIME
+        self.time_exit_minutes = TIME_EXIT_MINUTES
+        self.time_exit_profit_threshold = TIME_EXIT_PROFIT_THRESHOLD
+        # ✅ NEW: Heikin Ashi 15-min + Super Trend setup
+        # Using ATR period 5 to start trading earlier (~11:00 AM instead of 12:45 PM)
+        # This allows buying CALL options at lower prices and catching trends early
+        # ATR period 5 needs 6 candles (90 minutes) - minimum viable for accurate signals
+        self.candle_aggregator = CandleAggregator(candle_interval_minutes=15)
+        self.heikin_ashi_calc = HeikinAshiCalculator()
+        self.super_trend_calc = SuperTrendCalculator(atr_period=5, multiplier=Decimal('3.0'))
+        self.previous_super_trend = None  # Track previous Super Trend for signal detection
+        # Track consecutive red/green candles to avoid false exits on temporary pullbacks
+        self.consecutive_red_candles = 0  # Count consecutive red Super Trend candles
+        self.consecutive_green_candles = 0  # Count consecutive green Super Trend candles
+        self.target_points = TARGET_POINTS  # Target: 60 points profit
+        
+        # Keep old variables for backward compatibility (will be phased out)
         self.price_samples = []  # Track last 3 prices for range detection (from futures)
         self.price_history = []  # Track price history for EMA/RSI calculations (keep last 50)
         self.range_high = None
@@ -376,6 +407,58 @@ class Command(BaseCommand):
                         futures_ltp = self._get_latest_ltp(engine)
                         
                         if futures_ltp:
+                            # ✅ NEW: Add LTP to candle aggregator (15-minute candles)
+                            new_candle = self.candle_aggregator.add_ltp(futures_ltp, current_time_ist)
+                            
+                            # If new candle created (every 15 minutes)
+                            if new_candle:
+                                # Convert to Heikin Ashi
+                                ha_candle = self.heikin_ashi_calc.add_candle(new_candle)
+                                
+                                # Calculate Super Trend
+                                super_trend = self.super_trend_calc.add_candle(ha_candle)
+                                
+                                if super_trend:
+                                    # Detect signal change
+                                    signal_change = super_trend.get('signal_change', 'HOLD')
+                                    
+                                    # Track consecutive candles to avoid false exits on pullbacks
+                                    current_color = super_trend['color']
+                                    if current_color == 'GREEN':
+                                        self.consecutive_green_candles += 1
+                                        self.consecutive_red_candles = 0  # Reset red counter
+                                    elif current_color == 'RED':
+                                        self.consecutive_red_candles += 1
+                                        self.consecutive_green_candles = 0  # Reset green counter
+                                    
+                                    # Log Super Trend status
+                                    st_color_emoji = "🟢" if super_trend['color'] == 'GREEN' else "🔴"
+                                    logger.info(
+                                        f"Super Trend: Value=₹{super_trend['value']:.2f}, "
+                                        f"Color={super_trend['color']}, Signal={signal_change}, "
+                                        f"Consecutive Red={self.consecutive_red_candles}, Green={self.consecutive_green_candles}"
+                                    )
+                                    
+                                    # Display Super Trend update
+                                    if signal_change != 'HOLD':
+                                        self.stdout.write(self.style.SUCCESS(
+                                            f"📊 Super Trend {st_color_emoji}: {super_trend['color']} | "
+                                            f"Value: ₹{super_trend['value']:.2f} | Signal: {signal_change} | "
+                                            f"Consecutive: Red={self.consecutive_red_candles}, Green={self.consecutive_green_candles}"
+                                        ))
+                                    
+                                    # Check for entry signal (only if not in trade and signal changed)
+                                    if not self.current_position and signal_change == 'BUY':
+                                        # Super Trend turned GREEN - BUY CALL
+                                        self._handle_super_trend_entry('BUY', futures_ltp, engine, strategy, super_trend)
+                                    elif not self.current_position and signal_change == 'SELL':
+                                        # Super Trend turned RED - BUY PUT
+                                        self._handle_super_trend_entry('SELL', futures_ltp, engine, strategy, super_trend)
+                                    
+                                    # Update previous Super Trend
+                                    self.previous_super_trend = super_trend
+                            
+                            # Keep old logic for backward compatibility (will be removed later)
                             # Track futures price samples for range detection (keep last 3)
                             self.price_samples.append(futures_ltp)
                             if len(self.price_samples) > 3:
@@ -573,24 +656,89 @@ class Command(BaseCommand):
                                                 stoploss_price = entry_price * (Decimal('1') - current_stoploss)
                                                 price_below_stoploss = option_ltp <= stoploss_price
                                             
-                                            # Check exit conditions
-                                            # Add detailed logging for debugging (log every cycle when close to target)
-                                            target_price = entry_price * (Decimal('1') + Decimal(str(self.target_pct)))
+                                            # ✅ NEW: Calculate target in points (60 points)
+                                            # Target: 60 points profit
+                                            target_points = self.target_points
+                                            target_price = entry_price + target_points  # For CALL: price goes up
+                                            if "PE" in position_side:  # For PUT: price goes up when futures goes down
+                                                target_price = entry_price + target_points  # Same calculation
+                                            
+                                            # Also calculate percentage for logging
+                                            target_pct = (target_points / entry_price * 100) if entry_price > 0 else Decimal('0')
                                             is_close_to_target = option_ltp >= target_price * Decimal('0.99')  # Within 1% of target
                                             
                                             if cycle_count % 6 == 0 or is_close_to_target:  # Log every 6 cycles or when close to target
+                                                pnl_points = option_ltp - entry_price
                                                 logger.info(
                                                     f"Exit check: Entry=₹{entry_price:.2f}, Current=₹{option_ltp:.2f}, "
-                                                    f"Target=₹{target_price:.2f}, P&L%={pnl_pct*100:.2f}%, "
-                                                    f"Target%={self.target_pct*100:.2f}%, Stoploss%={current_stoploss*100:.2f}%"
+                                                    f"Target=₹{target_price:.2f} ({target_points} pts), "
+                                                    f"P&L={pnl_points:.2f} pts ({pnl_pct*100:.2f}%), "
+                                                    f"Stoploss%={current_stoploss*100:.2f}%"
                                                 )
                                                 # Also print to console when close to target
                                                 if is_close_to_target:
                                                     self.stdout.write(self.style.WARNING(
-                                                        f"🎯 Close to TARGET: Current ₹{option_ltp:.2f} | Target ₹{target_price:.2f} | P&L% {pnl_pct*100:.2f}%"
+                                                        f"🎯 Close to TARGET: Current ₹{option_ltp:.2f} | Target ₹{target_price:.2f} ({target_points} pts) | P&L {pnl_points:.2f} pts ({pnl_pct*100:.2f}%)"
                                                     ))
                                             
-                                            if pnl_pct >= Decimal(str(self.target_pct)):
+                                            # ✅ NEW: Check Super Trend reversal exit first (highest priority)
+                                            # ✅ IMPROVED: Require 2 consecutive red/green candles to avoid false exits on pullbacks
+                                            super_trend_exit = False
+                                            current_st = self.super_trend_calc.get_last_super_trend()
+                                            if current_st and self.previous_super_trend:
+                                                # Check if Super Trend changed color (reversal)
+                                                if "CE" in position_side:  # BUY CALL
+                                                    # Exit if Super Trend turns RED AND we have 2 consecutive red candles
+                                                    # This avoids exiting on temporary pullbacks (single red candle)
+                                                    if current_st['color'] == 'RED' and self.consecutive_red_candles >= 2:
+                                                        super_trend_exit = True
+                                                        logger.info(
+                                                            f"Super Trend reversal for CALL: 2 consecutive red candles detected "
+                                                            f"(Red count: {self.consecutive_red_candles})"
+                                                        )
+                                                elif "PE" in position_side:  # BUY PUT
+                                                    # Exit if Super Trend turns GREEN AND we have 2 consecutive green candles
+                                                    # This avoids exiting on temporary pullbacks (single green candle)
+                                                    if current_st['color'] == 'GREEN' and self.consecutive_green_candles >= 2:
+                                                        super_trend_exit = True
+                                                        logger.info(
+                                                            f"Super Trend reversal for PUT: 2 consecutive green candles detected "
+                                                            f"(Green count: {self.consecutive_green_candles})"
+                                                        )
+                                            
+                                            # Also check if current Super Trend color doesn't match position (with 2 consecutive candles requirement)
+                                            if not super_trend_exit and current_st:
+                                                if "CE" in position_side and current_st['color'] == 'RED':
+                                                    # CALL position but Super Trend is RED (downtrend)
+                                                    # Require 2 consecutive red candles to confirm reversal
+                                                    if self.consecutive_red_candles >= 2:
+                                                        super_trend_exit = True
+                                                elif "PE" in position_side and current_st['color'] == 'GREEN':
+                                                    # PUT position but Super Trend is GREEN (uptrend)
+                                                    # Require 2 consecutive green candles to confirm reversal
+                                                    if self.consecutive_green_candles >= 2:
+                                                        super_trend_exit = True
+                                            
+                                            if super_trend_exit:
+                                                pnl_points = option_ltp - entry_price
+                                                logger.info(
+                                                    f"🔄 Super Trend reversal: Exiting at ₹{option_ltp:.2f} "
+                                                    f"(Entry: ₹{entry_price:.2f}, P&L: {pnl_points:.2f} pts, {pnl_pct*100:.2f}%)"
+                                                )
+                                                self.stdout.write(self.style.WARNING(
+                                                    f"🔄 SUPER TREND REVERSAL! Exiting at ₹{option_ltp:.2f} "
+                                                    f"(Entry: ₹{entry_price:.2f}, Profit: {pnl_points:.2f} pts, {pnl_pct*100:.2f}%)"
+                                                ))
+                                                self._simulate_exit(option_ltp, "TRAILING", engine)
+                                            # ✅ NEW: Check target in points (60 points)
+                                            elif option_ltp >= target_price:
+                                                pnl_points = option_ltp - entry_price
+                                                logger.info(f"✅ TARGET HIT: P&L={pnl_points:.2f} pts ({pnl_pct*100:.2f}%) >= Target={target_points} pts")
+                                                self.stdout.write(self.style.SUCCESS(
+                                                    f"🎯 TARGET REACHED! Exiting at ₹{option_ltp:.2f} (Entry: ₹{entry_price:.2f}, Profit: {pnl_points:.2f} pts, {pnl_pct*100:.2f}%)"
+                                                ))
+                                                self._simulate_exit(option_ltp, "TARGET", engine)
+                                            elif pnl_pct >= Decimal(str(self.target_pct)):  # Fallback to percentage if points not hit
                                                 logger.info(f"✅ TARGET HIT: P&L%={pnl_pct*100:.2f}% >= Target%={self.target_pct*100:.2f}%")
                                                 self.stdout.write(self.style.SUCCESS(
                                                     f"🎯 TARGET REACHED! Exiting at ₹{option_ltp:.2f} (Entry: ₹{entry_price:.2f}, Profit: {pnl_pct*100:.2f}%)"
@@ -606,6 +754,13 @@ class Command(BaseCommand):
                                                     f"Stoploss%={current_stoploss*100:.2f}%"
                                                 )
                                                 self._simulate_exit(option_ltp, "STOPLOSS", engine)
+                                            # ✅ NEW: Conditional time-based exit (if profit < threshold after 12 minutes)
+                                            elif self._check_time_based_exit(entry, current_time_ist, pnl_pct):
+                                                logger.info(
+                                                    f"Time-based exit: Trade age > {self.time_exit_minutes} min, "
+                                                    f"Profit {pnl_pct*100:.2f}% < threshold {self.time_exit_profit_threshold*100:.2f}%"
+                                                )
+                                                self._simulate_exit(option_ltp, "TIME", engine)
                                             # Time-based exit (square-off time) - only if we're past square-off time
                                             elif current_time_ist.time() >= strategy.square_off_time:
                                                 self._simulate_exit(option_ltp, "TIME", engine)
@@ -619,7 +774,18 @@ class Command(BaseCommand):
                         if futures_ltp:
                             status_parts.append(f"Futures: ₹{futures_ltp:,.2f}")
                             
-                            # Calculate and show momentum indicators if we have enough data
+                            # ✅ NEW: Show Super Trend status
+                            current_st = self.super_trend_calc.get_last_super_trend()
+                            if current_st:
+                                st_color_emoji = "🟢" if current_st['color'] == 'GREEN' else "🔴"
+                                status_parts.append(f"Super Trend: {st_color_emoji} ₹{current_st['value']:,.2f} ({current_st['color']})")
+                            
+                            # Show candle count
+                            candle_count = len(self.candle_aggregator.candles)
+                            if candle_count > 0:
+                                status_parts.append(f"Candles: {candle_count}")
+                            
+                            # Calculate and show momentum indicators if we have enough data (for reference)
                             if len(self.price_history) >= 20:
                                 from trading.services.momentum import compute_ema, compute_rsi
                                 ema5 = compute_ema(self.price_history, 5)
@@ -630,7 +796,7 @@ class Command(BaseCommand):
                                     ema_gap_pct = ((ema5 - ema20) / ema20 * 100) if ema20 > 0 else Decimal('0')
                                     status_parts.append(f"RSI: {rsi:.1f} | EMA5: ₹{ema5:,.2f} | EMA20: ₹{ema20:,.2f} | Gap: {ema_gap_pct:.2f}%")
                             
-                            # Show range if established
+                            # Show range if established (legacy, will be phased out)
                             if self.range_high and self.range_low:
                                 range_pct = ((self.range_high - self.range_low) / self.range_low * 100) if self.range_low > 0 else Decimal('0')
                                 status_parts.append(f"Range: ₹{self.range_low:,.2f}-₹{self.range_high:,.2f} ({range_pct:.2f}%)")
@@ -794,43 +960,60 @@ class Command(BaseCommand):
     
     def _update_trailing_stoploss(self, current_price: Decimal, entry_price: Decimal, position_side: str):
         """
-        Update trailing stoploss dynamically based on profit
+        ✅ IMPROVED: Hybrid trailing stoploss with progressive levels
         
-        For BUY CALL: if current_price > entry_price * 1.005, move stoploss to current_price * 0.995
-        For BUY PUT: if current_price < entry_price * 0.995, move stoploss to current_price * 1.005
+        Logic:
+        - Initial SL = -1.2%
+        - If profit > +0.5% → move SL to -0.5%
+        - If profit > +1.0% → move SL to +0.1% (breakeven+)
+        - If profit > +1.5% → move SL to +0.5% (lock in profit)
+        - If profit > +2.5% → move SL to +1.0% (lock in more profit)
         
         Args:
             current_price: Current option LTP
             entry_price: Entry price
             position_side: "BUY_CE" or "BUY_PE"
         """
-        trigger_multiplier = Decimal('1') + Decimal(str(self.trailing_trigger_pct))  # 1.005 for +0.5%
-        trigger_multiplier_down = Decimal('1') - Decimal(str(self.trailing_trigger_pct))  # 0.995 for -0.5%
+        # Calculate current profit percentage
+        if "CE" in position_side:  # BUY CALL - profit when price goes up
+            pnl_pct = (current_price - entry_price) / entry_price
+        else:  # BUY PUT - profit when price goes down
+            pnl_pct = (entry_price - current_price) / entry_price
         
-        if "CE" in position_side:  # BUY CALL
-            # If current price is 0.5% above entry, activate trailing stoploss
-            if current_price > entry_price * trigger_multiplier:
-                # New stoploss: 0.5% below current price (protect 0.5% profit)
-                new_stoploss_price = current_price * trigger_multiplier_down
-                new_stoploss_pct = abs((new_stoploss_price - entry_price) / entry_price)
-                
-                # Only move stoploss up (less negative), never down
-                if new_stoploss_pct < abs(self.current_stoploss_pct):
-                    self.current_stoploss_pct = -new_stoploss_pct  # Negative because it's a loss threshold
-                    logger.debug(f"📈 Trailing stoploss updated for CALL: {self.current_stoploss_pct*100:.2f}%")
+        # Determine new stoploss level based on profit
+        new_stoploss_pct = None
         
-        elif "PE" in position_side:  # BUY PUT
-            # If current price is 0.5% below entry, activate trailing stoploss
-            # Note: For PUT, profit when price goes DOWN, so we check if current < entry * 0.995
-            if current_price < entry_price * trigger_multiplier_down:
-                # New stoploss: 0.5% above current price (protect 0.5% profit)
-                new_stoploss_price = current_price * trigger_multiplier  # 1.005
-                new_stoploss_pct = abs((new_stoploss_price - entry_price) / entry_price)
-                
-                # Only move stoploss up (less negative), never down
-                if new_stoploss_pct < abs(self.current_stoploss_pct):
-                    self.current_stoploss_pct = -new_stoploss_pct  # Negative because it's a loss threshold
-                    logger.debug(f"📉 Trailing stoploss updated for PUT: {self.current_stoploss_pct*100:.2f}%")
+        if pnl_pct >= Decimal('0.025'):  # Profit >= +2.5%
+            new_stoploss_pct = Decimal('0.01')  # Move SL to +1.0% (lock in 1% profit)
+            logger.info(f"📈 Trailing SL: Profit {pnl_pct*100:.2f}% >= 2.5% → Move SL to +1.0%")
+        elif pnl_pct >= Decimal('0.015'):  # Profit >= +1.5%
+            new_stoploss_pct = Decimal('0.005')  # Move SL to +0.5% (lock in 0.5% profit)
+            logger.info(f"📈 Trailing SL: Profit {pnl_pct*100:.2f}% >= 1.5% → Move SL to +0.5%")
+        elif pnl_pct >= Decimal('0.01'):  # Profit >= +1.0%
+            new_stoploss_pct = Decimal('0.001')  # Move SL to +0.1% (breakeven+)
+            logger.info(f"📈 Trailing SL: Profit {pnl_pct*100:.2f}% >= 1.0% → Move SL to +0.1%")
+        elif pnl_pct >= Decimal('0.005'):  # Profit >= +0.5%
+            new_stoploss_pct = Decimal('0.005')  # Move SL to -0.5% (reduce loss threshold)
+            logger.info(f"📈 Trailing SL: Profit {pnl_pct*100:.2f}% >= 0.5% → Move SL to -0.5%")
+        
+        # Update stoploss if we have a new level and it's better (less negative or positive)
+        if new_stoploss_pct is not None:
+            # For CALL: new_stoploss_pct should be less negative (or positive) than current
+            # For PUT: same logic applies
+            current_abs = abs(self.current_stoploss_pct)
+            new_abs = abs(new_stoploss_pct)
+            
+            # Update if new stoploss is better (less negative or positive)
+            # Better means: if new is positive, always update; if both negative, update if new is less negative
+            should_update = False
+            if new_stoploss_pct >= 0:  # New stoploss is positive (breakeven+)
+                should_update = True
+            elif self.current_stoploss_pct < 0 and new_stoploss_pct < 0:  # Both negative
+                should_update = new_abs < current_abs  # Update if new is less negative
+            
+            if should_update:
+                self.current_stoploss_pct = -new_stoploss_pct if new_stoploss_pct < 0 else new_stoploss_pct
+                logger.info(f"✅ Trailing stoploss updated: {self.current_stoploss_pct*100:.2f}% (was {current_abs*100:.2f}%)")
     
     def _check_momentum_filters(self, signal_type: str, current_price: Decimal, price_history: List[Decimal], return_details: bool = False):
         """
@@ -871,15 +1054,20 @@ class Command(BaseCommand):
         reasons = []
         
         if signal_type == "BUY":
-            # BUY: EMA5 > EMA20 * (1 + gap) AND RSI > rsi_buy_min
+            # ✅ IMPROVED: BUY: EMA5 > EMA20 * (1 + gap) AND RSI > rsi_buy_min AND RSI < rsi_buy_max
             ema_condition = ema5 > ema20 * (Decimal('1') + ema_gap)
-            rsi_condition = rsi > rsi_buy_min
+            rsi_buy_max = getattr(self, 'rsi_buy_max', Decimal('70'))
+            rsi_condition_min = rsi > rsi_buy_min
+            rsi_condition_max = rsi < rsi_buy_max  # ✅ NEW: Avoid overbought entries
+            rsi_condition = rsi_condition_min and rsi_condition_max
             
             if not ema_condition:
                 ema_gap_actual = ((ema5 - ema20) / ema20 * 100) if ema20 > 0 else Decimal('0')
                 reasons.append(f"EMA gap too small (need {ema_gap*100:.2f}%, have {ema_gap_actual:.2f}%)")
-            if not rsi_condition:
+            if not rsi_condition_min:
                 reasons.append(f"RSI too low (need >{rsi_buy_min}, have {rsi:.1f})")
+            if not rsi_condition_max:
+                reasons.append(f"RSI too high/overbought (need <{rsi_buy_max}, have {rsi:.1f})")
             
             passed = ema_condition and rsi_condition
             
@@ -892,19 +1080,26 @@ class Command(BaseCommand):
                     'ema20': ema20,
                     'ema_gap_pct': ((ema5 - ema20) / ema20 * 100) if ema20 > 0 else Decimal('0'),
                     'rsi_condition': rsi_condition,
+                    'rsi_condition_min': rsi_condition_min,
+                    'rsi_condition_max': rsi_condition_max,
                     'ema_condition': ema_condition
                 }
             return passed
             
         elif signal_type == "SELL":
-            # SELL: EMA5 < EMA20 * (1 - gap) AND RSI < rsi_sell_max
+            # ✅ IMPROVED: SELL: EMA5 < EMA20 * (1 - gap) AND RSI > rsi_sell_min AND RSI < rsi_sell_max
             ema_condition = ema5 < ema20 * (Decimal('1') - ema_gap)
-            rsi_condition = rsi < rsi_sell_max
+            rsi_sell_min = getattr(self, 'rsi_sell_min', Decimal('30'))
+            rsi_condition_min = rsi > rsi_sell_min  # ✅ NEW: Avoid oversold entries
+            rsi_condition_max = rsi < rsi_sell_max
+            rsi_condition = rsi_condition_min and rsi_condition_max
             
             if not ema_condition:
                 ema_gap_actual = ((ema5 - ema20) / ema20 * 100) if ema20 > 0 else Decimal('0')
                 reasons.append(f"EMA gap too small (need <{-ema_gap*100:.2f}%, have {ema_gap_actual:.2f}%)")
-            if not rsi_condition:
+            if not rsi_condition_min:
+                reasons.append(f"RSI too low/oversold (need >{rsi_sell_min}, have {rsi:.1f})")
+            if not rsi_condition_max:
                 reasons.append(f"RSI too high (need <{rsi_sell_max}, have {rsi:.1f})")
             
             passed = ema_condition and rsi_condition
@@ -918,12 +1113,102 @@ class Command(BaseCommand):
                     'ema20': ema20,
                     'ema_gap_pct': ((ema5 - ema20) / ema20 * 100) if ema20 > 0 else Decimal('0'),
                     'rsi_condition': rsi_condition,
+                    'rsi_condition_min': rsi_condition_min,
+                    'rsi_condition_max': rsi_condition_max,
                     'ema_condition': ema_condition
                 }
             return passed
         
         if return_details:
             return {'passed': False, 'reasons': ['Invalid signal type: {}'.format(signal_type)]}
+        return False
+    
+    def _check_trend_reversal_exit(self, entry: dict, futures_ltp: Decimal, position_side: str) -> bool:
+        """
+        ✅ ENHANCED: Check if momentum is weakening (for trend-following exit)
+        
+        Logic (MORE SENSITIVE - exits on RSI alone):
+        - For BUY_CE (CALL): Exit if RSI < 50 (momentum weakening, catches reversals faster)
+        - For BUY_PE (PUT): Exit if RSI > 50 (momentum weakening, catches reversals faster)
+        
+        Why RSI alone?
+        - RSI is a leading indicator (reacts faster than EMA)
+        - EMA is a lagging indicator (reacts slower)
+        - Exiting on RSI alone catches momentum loss earlier
+        - Would have exited Trade #43 at ₹446-447 instead of ₹442.90
+        
+        Args:
+            entry: Current position dict
+            futures_ltp: Current futures LTP
+            position_side: "BUY_CE" or "BUY_PE"
+        
+        Returns:
+            bool: True if momentum weakening detected, False otherwise
+        """
+        if not self.price_history or len(self.price_history) < 20:
+            return False
+        
+        from trading.services.momentum import compute_rsi
+        
+        rsi = compute_rsi(self.price_history, 14)
+        
+        if rsi is None:
+            return False
+        
+        # Check momentum weakening based on position side
+        if "CE" in position_side:  # BUY CALL - exit if momentum weakening
+            # Exit if RSI < 50 (momentum weakening, catches reversals faster)
+            if rsi < Decimal('50'):
+                logger.info(
+                    f"🔄 Momentum weakening for CALL: RSI ({rsi:.1f}) < 50 "
+                    f"(exiting early to protect profit)"
+                )
+                return True
+        else:  # BUY PUT - exit if momentum weakening
+            # Exit if RSI > 50 (momentum weakening, catches reversals faster)
+            if rsi > Decimal('50'):
+                logger.info(
+                    f"🔄 Momentum weakening for PUT: RSI ({rsi:.1f}) > 50 "
+                    f"(exiting early to protect profit)"
+                )
+                return True
+        
+        return False
+    
+    def _check_time_based_exit(self, entry: dict, current_time, pnl_pct: Decimal) -> bool:
+        """
+        ✅ NEW: Check if trade should exit based on time and profit threshold
+        
+        Logic:
+        - If trade is older than TIME_EXIT_MINUTES (12 minutes)
+        - AND profit < TIME_EXIT_PROFIT_THRESHOLD (0.3%)
+        - Then exit (prevent holding losing trades too long)
+        
+        Args:
+            entry: Current position dict with 'entry_time'
+            current_time: Current datetime
+            pnl_pct: Current profit percentage
+        
+        Returns:
+            bool: True if should exit, False otherwise
+        """
+        if not entry or 'entry_time' not in entry:
+            return False
+        
+        entry_time = entry.get('entry_time')
+        if not entry_time:
+            return False
+        
+        # Calculate trade age in minutes
+        time_diff = current_time - entry_time
+        trade_age_minutes = time_diff.total_seconds() / 60
+        
+        # Check if trade is older than threshold
+        if trade_age_minutes >= self.time_exit_minutes:
+            # Check if profit is below threshold
+            if pnl_pct < self.time_exit_profit_threshold:
+                return True
+        
         return False
     
     def _handle_breakout(self, breakout_signal, futures_ltp, engine, strategy):
@@ -1053,6 +1338,112 @@ class Command(BaseCommand):
             logger.error(f"Error handling breakout: {e}")
             self.stdout.write(self.style.ERROR(f"❌ Error handling breakout: {e}"))
     
+    def _handle_super_trend_entry(self, signal_type, futures_ltp, engine, strategy, super_trend):
+        """
+        Handle Super Trend entry signal
+        
+        Args:
+            signal_type: 'BUY' or 'SELL'
+            futures_ltp: Current futures LTP
+            engine: Strategy engine instance
+            strategy: Strategy model instance
+            super_trend: Super Trend dict
+        """
+        try:
+            # Check if already in trade
+            if self.current_position:
+                logger.info(f"Already in trade, skipping Super Trend {signal_type} signal")
+                return
+            
+            # Check cooldown period
+            if self.last_trade_exit_time:
+                time_since_exit = get_ist_now() - self.last_trade_exit_time
+                cooldown_seconds = self.trade_cooldown_minutes * 60
+                if time_since_exit.total_seconds() < cooldown_seconds:
+                    remaining_seconds = int(cooldown_seconds - time_since_exit.total_seconds())
+                    logger.info(f"Cooldown active: {remaining_seconds}s remaining, skipping Super Trend {signal_type} signal")
+                    return
+            
+            # Check trading window
+            current_time = get_ist_now().time()
+            is_in_trading_window = (current_time >= self.trade_start_time and 
+                                   current_time <= self.trade_end_time)
+            
+            if not is_in_trading_window:
+                logger.info(f"Outside trading window, skipping Super Trend {signal_type} signal")
+                return
+            
+            # Get futures symbol
+            futures_symbol = getattr(engine, 'futures_symbol', None)
+            if not futures_symbol:
+                if hasattr(engine, 'data_service') and hasattr(engine.data_service, 'futures_symbol'):
+                    futures_symbol = engine.data_service.futures_symbol
+            
+            # Select option symbol
+            strike_reference_price = futures_ltp
+            if strategy.yesterday_closing_price:
+                strike_reference_price = Decimal(str(strategy.yesterday_closing_price))
+            
+            option_symbol, strike, expiry_date = self.strike_selector.select_strike(
+                spot_price=strike_reference_price,
+                signal_type=signal_type,
+                strong_momentum=False,
+                futures_symbol=futures_symbol
+            )
+            
+            self.stdout.write(self.style.SUCCESS(
+                f"\n🎯 Super Trend Signal: {signal_type} | Futures LTP: ₹{futures_ltp:,.2f}"
+            ))
+            self.stdout.write(self.style.SUCCESS(
+                f"📊 Super Trend: ₹{super_trend['value']:.2f} | Color: {super_trend['color']}"
+            ))
+            self.stdout.write(self.style.SUCCESS(
+                f"📊 Selected Option: {option_symbol} | Strike: {strike} | Expiry: {expiry_date}"
+            ))
+            
+            # Subscribe to option symbol
+            if hasattr(engine, 'data_service') and hasattr(engine.data_service, 'subscribe'):
+                try:
+                    engine.data_service.subscribe(option_symbol)
+                    self.stdout.write(self.style.SUCCESS(f"🔔 Subscribed to {option_symbol}"))
+                    time.sleep(1)
+                except Exception as e:
+                    logger.warning(f"Failed to subscribe to {option_symbol}: {e}")
+            
+            time.sleep(1)
+            
+            # Get option LTP
+            option_ltp = self._get_option_ltp(option_symbol, engine)
+            
+            # Validate LTP
+            if option_ltp and option_ltp == Decimal('100.00'):
+                symbol_found = False
+                if hasattr(engine, 'data_service'):
+                    if hasattr(engine.data_service, 'ltp_cache') and option_symbol in engine.data_service.ltp_cache:
+                        symbol_found = True
+                    elif hasattr(engine.data_service, 'get_latest_ltp'):
+                        test_ltp = engine.data_service.get_latest_ltp(option_symbol)
+                        if test_ltp and test_ltp != Decimal('100.00'):
+                            symbol_found = True
+                            option_ltp = test_ltp
+                
+                if not symbol_found:
+                    self.stdout.write(self.style.ERROR(
+                        f"❌ Option symbol {option_symbol} not found. Skipping trade."
+                    ))
+                    return
+            
+            if option_ltp:
+                position_side = "BUY_CE" if signal_type == "BUY" else "BUY_PE"
+                self._simulate_entry(position_side, option_symbol, option_ltp, futures_ltp, strike, expiry_date, engine, strategy)
+            else:
+                self.stdout.write(self.style.WARNING(
+                    f"⚠️  Option LTP not available for {option_symbol}, skipping trade"
+                ))
+        except Exception as e:
+            logger.error(f"Error handling Super Trend entry: {e}")
+            self.stdout.write(self.style.ERROR(f"❌ Error handling Super Trend entry: {e}"))
+    
     def _get_option_ltp(self, option_symbol, engine):
         """Get option LTP from WebSocket or data service"""
         option_ltp = None
@@ -1145,6 +1536,14 @@ class Command(BaseCommand):
             f"{'='*80}\n"
         ))
         
+        # Log to CSV
+        self._log_trade_entry(position_side, option_symbol, option_ltp, futures_ltp, strike, entry_time)
+        
+        # Save to TradeLog model FIRST (pass total_units to store as entry_quantity)
+        # This creates the trade_log and sets self.trade_log_id
+        self._save_trade_log_entry(position_side, option_symbol, option_ltp, futures_ltp, strike, expiry_date, entry_time, strategy, total_units)
+        
+        # NOW create current_position with the CORRECT trade_log_id (after it's been set)
         self.current_position = {
             "side": position_side,
             "symbol": option_symbol,
@@ -1154,7 +1553,7 @@ class Command(BaseCommand):
             "expiry_date": expiry_date,
             "time": entry_time,
             "entry_time": entry_time,
-            "trade_log_id": getattr(self, 'trade_log_id', None),  # Store for exit update
+            "trade_log_id": getattr(self, 'trade_log_id', None),  # This will now have the correct ID
             "total_units": total_units,  # Store total units for P&L calculation (num_lots * lot_size)
             "num_lots": num_lots,  # Store number of lots
             "lot_size": lot_size  # Store lot_size for reference
@@ -1162,15 +1561,12 @@ class Command(BaseCommand):
         
         # Reset trailing stoploss to initial value on new entry
         self.current_stoploss_pct = self.stoploss_pct
+        # Reset consecutive candle counters on new entry
+        self.consecutive_red_candles = 0
+        self.consecutive_green_candles = 0
         
         # Set flag to skip exit checks in the same cycle as entry
         self.position_just_entered = True
-        
-        # Log to CSV
-        self._log_trade_entry(position_side, option_symbol, option_ltp, futures_ltp, strike, entry_time)
-        
-        # Save to TradeLog model (pass total_units to store as entry_quantity)
-        self._save_trade_log_entry(position_side, option_symbol, option_ltp, futures_ltp, strike, expiry_date, entry_time, strategy, total_units)
     
     def _restore_open_position(self, strategy):
         """Restore open position from database if strategy was restarted"""
@@ -1459,6 +1855,27 @@ class Command(BaseCommand):
             
             # Update TradeLog
             trade_log = TradeLog.objects.get(id=trade_log_id)
+            
+            # Validate that the trade_log matches the entry symbol (safety check)
+            option_symbol = entry.get('symbol')
+            if option_symbol and trade_log.entry_symbol != option_symbol:
+                logger.error(
+                    f"⚠️ TradeLog ID {trade_log_id} symbol mismatch! "
+                    f"Expected: {option_symbol}, Found: {trade_log.entry_symbol}. "
+                    f"Trying to find correct trade..."
+                )
+                # Try to find the correct trade by symbol and entry_time
+                correct_trade = TradeLog.objects.filter(
+                    entry_symbol=option_symbol,
+                    entry_time=entry.get('entry_time'),
+                    is_open=True
+                ).order_by('-entry_time').first()
+                if correct_trade:
+                    trade_log = correct_trade
+                    logger.info(f"✅ Found correct trade: ID={correct_trade.id}")
+                else:
+                    logger.error(f"❌ Could not find correct trade for {option_symbol}")
+                    return
             
             # Use database entry_price for accurate pnl_points calculation
             db_entry_price = Decimal(str(trade_log.entry_price))
