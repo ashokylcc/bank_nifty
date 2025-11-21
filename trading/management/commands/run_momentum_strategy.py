@@ -312,13 +312,22 @@ class Command(BaseCommand):
         self.time_exit_minutes = TIME_EXIT_MINUTES
         self.time_exit_profit_threshold = TIME_EXIT_PROFIT_THRESHOLD
         # ✅ NEW: Heikin Ashi 15-min + Super Trend setup
-        # Using ATR period 5 to start trading earlier (~11:00 AM instead of 12:45 PM)
-        # This allows buying CALL options at lower prices and catching trends early
-        # ATR period 5 needs 6 candles (90 minutes) - minimum viable for accurate signals
+        # Using ATR period 10 and multiplier 3.0 to match mobile chart (Supertrend 10,3)
+        # Initialize with historical candles from previous day to start trading at 9:30 AM
         self.candle_aggregator = CandleAggregator(candle_interval_minutes=15)
         self.heikin_ashi_calc = HeikinAshiCalculator()
-        self.super_trend_calc = SuperTrendCalculator(atr_period=5, multiplier=Decimal('3.0'))
+        self.super_trend_calc = SuperTrendCalculator(atr_period=10, multiplier=Decimal('3.0'))
         self.previous_super_trend = None  # Track previous Super Trend for signal detection
+        self.first_new_candle_today = True  # Track if this is the first NEW candle of today (not historical)
+        
+        # ✅ Load historical candles from previous day to initialize Super Trend
+        try:
+            self._load_historical_candles(engine, strategy)
+        except Exception as e:
+            logger.warning(f"Could not load historical candles: {e}")
+            self.stdout.write(self.style.WARNING(
+                f"⚠️  Could not load historical candles: {e}. Strategy will start after collecting 11 candles."
+            ))
         # Track consecutive red/green candles to avoid false exits on temporary pullbacks
         self.consecutive_red_candles = 0  # Count consecutive red Super Trend candles
         self.consecutive_green_candles = 0  # Count consecutive green Super Trend candles
@@ -412,6 +421,19 @@ class Command(BaseCommand):
                             
                             # If new candle created (every 15 minutes)
                             if new_candle:
+                                # Log new candle creation
+                                candle_time = new_candle['timestamp'].strftime('%H:%M:%S')
+                                logger.info(
+                                    f"🕯️ NEW CANDLE CREATED at {candle_time}: "
+                                    f"O=₹{new_candle['open']:.2f}, H=₹{new_candle['high']:.2f}, "
+                                    f"L=₹{new_candle['low']:.2f}, C=₹{new_candle['close']:.2f}"
+                                )
+                                self.stdout.write(self.style.SUCCESS(
+                                    f"🕯️ NEW 15-MIN CANDLE at {candle_time}: "
+                                    f"O=₹{new_candle['open']:.2f}, H=₹{new_candle['high']:.2f}, "
+                                    f"L=₹{new_candle['low']:.2f}, C=₹{new_candle['close']:.2f}"
+                                ))
+                                
                                 # Convert to Heikin Ashi
                                 ha_candle = self.heikin_ashi_calc.add_candle(new_candle)
                                 
@@ -431,195 +453,129 @@ class Command(BaseCommand):
                                         self.consecutive_red_candles += 1
                                         self.consecutive_green_candles = 0  # Reset green counter
                                     
-                                    # Log Super Trend status
+                                    # Check if this is the first NEW candle of today (not historical)
+                                    # This allows entry when market opens with a signal
+                                    is_first_new_candle = self.first_new_candle_today
+                                    if is_first_new_candle:
+                                        self.first_new_candle_today = False  # Mark that we've processed first new candle
+                                    
+                                    # Log Super Trend status with detailed info
                                     st_color_emoji = "🟢" if super_trend['color'] == 'GREEN' else "🔴"
+                                    ha_close = ha_candle['ha_close']
+                                    st_value = super_trend['value']
+                                    # Show why color was determined
+                                    color_reason = f"HA Close (₹{ha_close:.2f}) {'>' if ha_close > st_value else '<='} ST Value (₹{st_value:.2f})"
                                     logger.info(
-                                        f"Super Trend: Value=₹{super_trend['value']:.2f}, "
+                                        f"Super Trend: Value=₹{st_value:.2f}, "
                                         f"Color={super_trend['color']}, Signal={signal_change}, "
-                                        f"Consecutive Red={self.consecutive_red_candles}, Green={self.consecutive_green_candles}"
+                                        f"HA Close=₹{ha_close:.2f} ({color_reason}), "
+                                        f"Consecutive Red={self.consecutive_red_candles}, Green={self.consecutive_green_candles}, "
+                                        f"First New Candle={is_first_new_candle}"
                                     )
                                     
                                     # Display Super Trend update
-                                    if signal_change != 'HOLD':
+                                    if signal_change != 'HOLD' or is_first_new_candle:
+                                        signal_display = signal_change if signal_change != 'HOLD' else f"INITIAL {super_trend['signal']}"
                                         self.stdout.write(self.style.SUCCESS(
                                             f"📊 Super Trend {st_color_emoji}: {super_trend['color']} | "
-                                            f"Value: ₹{super_trend['value']:.2f} | Signal: {signal_change} | "
+                                            f"Value: ₹{super_trend['value']:.2f} | Signal: {signal_display} | "
                                             f"Consecutive: Red={self.consecutive_red_candles}, Green={self.consecutive_green_candles}"
                                         ))
                                     
-                                    # Check for entry signal (only if not in trade and signal changed)
-                                    if not self.current_position and signal_change == 'BUY':
-                                        # Super Trend turned GREEN - BUY CALL
-                                        self._handle_super_trend_entry('BUY', futures_ltp, engine, strategy, super_trend)
-                                    elif not self.current_position and signal_change == 'SELL':
-                                        # Super Trend turned RED - BUY PUT
-                                        self._handle_super_trend_entry('SELL', futures_ltp, engine, strategy, super_trend)
+                                    # Check for entry signal:
+                                    # 1. First NEW candle of today (market opened with signal) - enter based on current color
+                                    # 2. Signal change (GREEN→RED or RED→GREEN) - enter on change
+                                    # 3. ✅ NEW: Consistent signal (not in trade, Super Trend showing RED/GREEN) - enter on new candle
+                                    if not self.current_position:
+                                        if is_first_new_candle:
+                                            # First new candle of today - enter if signal is present
+                                            if current_color == 'GREEN':
+                                                # Market opened with BUY signal
+                                                self.stdout.write(self.style.SUCCESS(
+                                                    f"🌅 Market opened with BUY signal (GREEN) - Entering CALL trade"
+                                                ))
+                                                self._handle_super_trend_entry('BUY', futures_ltp, engine, strategy, super_trend)
+                                            elif current_color == 'RED':
+                                                # Market opened with SELL signal
+                                                self.stdout.write(self.style.SUCCESS(
+                                                    f"🌅 Market opened with SELL signal (RED) - Entering PUT trade"
+                                                ))
+                                                self._handle_super_trend_entry('SELL', futures_ltp, engine, strategy, super_trend)
+                                        elif signal_change == 'BUY':
+                                            # Super Trend turned GREEN - BUY CALL
+                                            self._handle_super_trend_entry('BUY', futures_ltp, engine, strategy, super_trend)
+                                        elif signal_change == 'SELL':
+                                            # Super Trend turned RED - BUY PUT
+                                            self._handle_super_trend_entry('SELL', futures_ltp, engine, strategy, super_trend)
+                                        else:
+                                            # ✅ NEW: No signal change, but Super Trend is showing a consistent signal
+                                            # This handles cases where Super Trend was already RED/GREEN from historical data
+                                            # and stays that way (no signal change, but signal is still present)
+                                            # Only enter if we have at least 2 consecutive candles of the same color (confirms trend)
+                                            
+                                            # ✅ IMPORTANT: Check candle direction to avoid entering on pullbacks/reversals
+                                            # Get last HA candle to check direction
+                                            last_ha = self.heikin_ashi_calc.get_last_candle()
+                                            candle_direction = None
+                                            if last_ha:
+                                                # For HA candles: if HA_Close > HA_Open, it's bullish (up)
+                                                # If HA_Close < HA_Open, it's bearish (down)
+                                                if last_ha['ha_close'] > last_ha['ha_open']:
+                                                    candle_direction = 'BULLISH'  # Green/up candle
+                                                elif last_ha['ha_close'] < last_ha['ha_open']:
+                                                    candle_direction = 'BEARISH'  # Red/down candle
+                                                # If HA_Close == HA_Open, it's neutral (doji)
+                                            
+                                            if current_color == 'GREEN' and self.consecutive_green_candles >= 2:
+                                                # Super Trend is consistently GREEN (BUY signal) - enter CALL
+                                                # ✅ Check: If last candle is bearish (down), wait for confirmation (avoid entering on pullback)
+                                                if candle_direction == 'BEARISH':
+                                                    logger.info(
+                                                        f"Super Trend GREEN but last candle is BEARISH (pullback?) - "
+                                                        f"Waiting for confirmation before entering CALL trade"
+                                                    )
+                                                    # Don't enter - wait for next candle to confirm
+                                                else:
+                                                    # Candle is bullish or neutral - safe to enter
+                                                    logger.info(
+                                                        f"Super Trend consistently GREEN ({self.consecutive_green_candles} consecutive) - Entering CALL trade "
+                                                        f"(Value: ₹{super_trend['value']:.2f}, Candle: {candle_direction or 'NEUTRAL'})"
+                                                    )
+                                                    self.stdout.write(self.style.SUCCESS(
+                                                        f"📊 Super Trend consistently GREEN ({self.consecutive_green_candles} consecutive candles) - Entering CALL trade"
+                                                    ))
+                                                    self._handle_super_trend_entry('BUY', futures_ltp, engine, strategy, super_trend)
+                                            elif current_color == 'RED' and self.consecutive_red_candles >= 2:
+                                                # Super Trend is consistently RED (SELL signal) - enter PUT
+                                                # ✅ Check: If last candle is bullish (up), wait for confirmation (avoid entering on pullback/reversal)
+                                                if candle_direction == 'BULLISH':
+                                                    logger.info(
+                                                        f"Super Trend RED but last candle is BULLISH (pullback/reversal?) - "
+                                                        f"Waiting for confirmation before entering PUT trade"
+                                                    )
+                                                    # Don't enter - wait for next candle to confirm
+                                                else:
+                                                    # Candle is bearish or neutral - safe to enter
+                                                    logger.info(
+                                                        f"Super Trend consistently RED ({self.consecutive_red_candles} consecutive) - Entering PUT trade "
+                                                        f"(Value: ₹{super_trend['value']:.2f}, Candle: {candle_direction or 'NEUTRAL'})"
+                                                    )
+                                                    self.stdout.write(self.style.SUCCESS(
+                                                        f"📊 Super Trend consistently RED ({self.consecutive_red_candles} consecutive candles) - Entering PUT trade"
+                                                    ))
+                                                    self._handle_super_trend_entry('SELL', futures_ltp, engine, strategy, super_trend)
                                     
                                     # Update previous Super Trend
                                     self.previous_super_trend = super_trend
                             
-                            # Keep old logic for backward compatibility (will be removed later)
-                            # Track futures price samples for range detection (keep last 3)
-                            self.price_samples.append(futures_ltp)
-                            if len(self.price_samples) > 3:
-                                self.price_samples.pop(0)
-                            
-                            # Track price history for EMA/RSI calculations (keep last 50)
+                            # ✅ OLD BREAKOUT LOGIC DISABLED - Now using Super Trend + Heikin Ashi only
+                            # Track price history for display purposes only (EMA/RSI in status)
                             self.price_history.append(futures_ltp)
                             if len(self.price_history) > 50:
                                 self.price_history.pop(0)
                             
-                            # Detect breakout after at least 3 data points (using futures LTP)
-                            # Only allow new entries during trading window (9:30 AM - 11:00 AM)
-                            current_time = get_ist_now().time()
-                            is_in_trading_window = (current_time >= self.trade_start_time and 
-                                                   current_time <= self.trade_end_time)
-                            
-                            # Establish range once when we have 3 samples (regardless of trading window)
-                            # Require minimum range size (0.05% or 10 points) to ensure meaningful breakouts
-                            # Note: Range can be established outside trading window, but trades only during window
-                            if len(self.price_samples) == 3 and not self.range_established and not self.current_position:
-                                temp_range_high = max(self.price_samples)
-                                temp_range_low = min(self.price_samples)
-                                range_size = temp_range_high - temp_range_low
-                                range_pct = (range_size / temp_range_low * 100) if temp_range_low > 0 else Decimal('0')
-                                
-                                # Minimum range requirement: at least 0.05% or 10 points
-                                min_range_pct = Decimal('0.05')
-                                min_range_points = Decimal('10')
-                                
-                                if range_pct >= min_range_pct or range_size >= min_range_points:
-                                    # Valid range - establish it
-                                    self.range_high = temp_range_high
-                                    self.range_low = temp_range_low
-                                    self.range_established = True
-                                    
-                                    # Calculate dynamic breakout percentage for display
-                                    range_width = self.range_high - self.range_low
-                                    if range_width < 40:
-                                        breakout_pct = Decimal('0.0005')
-                                    elif 40 <= range_width <= 80:
-                                        breakout_pct = Decimal('0.001')
-                                    else:
-                                        breakout_pct = Decimal('0.0015')
-                                    
-                                    window_status = "✅ Ready for trading" if is_in_trading_window else "⏳ Waiting for trading window (9:30 AM - 3:30 PM)"
-                                    self.stdout.write(self.style.SUCCESS(
-                                        f"✅ Range established: ₹{self.range_low:,.2f} - ₹{self.range_high:,.2f} ({range_pct:.2f}%) | "
-                                        f"Dynamic Breakout %: {breakout_pct*100:.2f}% | Range width: {range_width:.0f} pts | {window_status}"
-                                    ))
-                                else:
-                                    # Range too small - keep collecting samples (remove oldest, will add new one next cycle)
-                                    self.price_samples.pop(0)
-                                    # Don't establish range yet - wait for more variation
-                                    if cycle_count % 12 == 0:  # Log every ~1 minute (12 cycles * 5s = 60s)
-                                        self.stdout.write(self.style.WARNING(
-                                            f"⏳ Waiting for sufficient price variation to establish range (current: {range_pct:.3f}%, need: {min_range_pct}% or {min_range_points} points)"
-                                        ))
-                            
-                            # Check for breakout if range is established and no current position
-                            # Detect breakouts anytime (for monitoring), but only execute trades during trading window
-                            # Also check if cooldown period has passed since last trade exit
-                            cooldown_passed = True
-                            if self.last_trade_exit_time:
-                                time_since_exit = current_time_ist - self.last_trade_exit_time
-                                cooldown_seconds = self.trade_cooldown_minutes * 60
-                                if time_since_exit.total_seconds() < cooldown_seconds:
-                                    cooldown_passed = False
-                                    remaining_seconds = int(cooldown_seconds - time_since_exit.total_seconds())
-                                    if cycle_count % 12 == 0:  # Log every 12 cycles (~1 minute)
-                                        self.stdout.write(self.style.WARNING(
-                                            f"⏸️  Cooldown active: {remaining_seconds}s remaining before next trade allowed"
-                                        ))
-                            
-                            if self.range_established and not self.current_position and cooldown_passed:
-                                # ========================================
-                                # Dynamic Breakout Logic
-                                # ========================================
-                                range_width = self.range_high - self.range_low
-                                
-                                # Determine dynamic breakout percentage based on range width
-                                if range_width < 40:
-                                    breakout_pct = Decimal('0.0005')  # 0.05%
-                                elif 40 <= range_width <= 80:
-                                    breakout_pct = Decimal('0.001')   # 0.1%
-                                else:  # range_width > 80
-                                    breakout_pct = Decimal('0.0015')  # 0.15%
-                                
-                                # Store breakout_pct for logging
-                                self.breakout_pct = breakout_pct
-                                self.range_width = range_width
-                                
-                                # Calculate breakout thresholds using dynamic percentage
-                                buy_breakout_level = self.range_high * (Decimal('1') + breakout_pct)
-                                sell_breakout_level = self.range_low * (Decimal('1') - breakout_pct)
-                                
-                                # Calculate distance to breakout (for periodic logging)
-                                distance_to_buy = ((futures_ltp - buy_breakout_level) / buy_breakout_level * 100) if buy_breakout_level > 0 else Decimal('0')
-                                distance_to_sell = ((sell_breakout_level - futures_ltp) / sell_breakout_level * 100) if sell_breakout_level > 0 else Decimal('0')
-                                
-                                # Log proximity to breakout every 12 cycles (~1 minute) if price is near range boundaries
-                                if cycle_count % 12 == 0:
-                                    # Check "Very close" first (most urgent) - within 0.05% of breakout level
-                                    if futures_ltp >= buy_breakout_level * Decimal('0.9995') and futures_ltp < buy_breakout_level:
-                                        points_needed = buy_breakout_level - futures_ltp
-                                        self.stdout.write(self.style.WARNING(
-                                            f"🔥 Very close to BUY breakout: Price ₹{futures_ltp:,.2f} | Need ₹{buy_breakout_level:,.2f} (+₹{points_needed:,.2f} or {distance_to_buy:+.3f}%)"
-                                        ))
-                                    elif futures_ltp <= sell_breakout_level * Decimal('1.0005') and futures_ltp > sell_breakout_level:
-                                        points_needed = futures_ltp - sell_breakout_level
-                                        self.stdout.write(self.style.WARNING(
-                                            f"🔥 Very close to SELL breakout: Price ₹{futures_ltp:,.2f} | Need ₹{sell_breakout_level:,.2f} (-₹{points_needed:,.2f} or {distance_to_sell:+.3f}%)"
-                                        ))
-                                    # Check if price is at or above range high (approaching buy breakout)
-                                    elif futures_ltp >= self.range_high and futures_ltp < buy_breakout_level:
-                                        points_needed = buy_breakout_level - futures_ltp
-                                        self.stdout.write(self.style.WARNING(
-                                            f"📈 Approaching BUY breakout: Price ₹{futures_ltp:,.2f} | Range High: ₹{self.range_high:,.2f} | Need ₹{buy_breakout_level:,.2f} (+₹{points_needed:,.2f} or {distance_to_buy:+.3f}%)"
-                                        ))
-                                    # Check if price is at or below range low (approaching sell breakout)
-                                    elif futures_ltp <= self.range_low and futures_ltp > sell_breakout_level:
-                                        points_needed = futures_ltp - sell_breakout_level
-                                        self.stdout.write(self.style.WARNING(
-                                            f"📉 Approaching SELL breakout: Price ₹{futures_ltp:,.2f} | Range Low: ₹{self.range_low:,.2f} | Need ₹{sell_breakout_level:,.2f} (-₹{points_needed:,.2f} or {distance_to_sell:+.3f}%)"
-                                        ))
-                                
-                                # Breakout detection: futures price >= high * 1.001 (BUY) or <= low * 0.999 (SELL)
-                                breakout_signal = None
-                                if futures_ltp >= buy_breakout_level:
-                                    breakout_signal = "BUY"
-                                elif futures_ltp <= sell_breakout_level:
-                                    breakout_signal = "SELL"
-                                
-                                # If breakout detected
-                                if breakout_signal:
-                                    if is_in_trading_window:
-                                        # During trading window: apply momentum filters and execute trade
-                                        filter_result = self._check_momentum_filters(breakout_signal, futures_ltp, self.price_history, return_details=True)
-                                        if isinstance(filter_result, dict):
-                                            # Filters failed - show why
-                                            if not filter_result.get('passed', False):
-                                                reasons = filter_result.get('reasons', [])
-                                                self.stdout.write(self.style.WARNING(
-                                                    f"⚠️  Breakout detected ({breakout_signal}) but momentum filters failed: {', '.join(reasons)}"
-                                                ))
-                                            else:
-                                                # Filters passed - proceed with trade
-                                                self._handle_breakout(breakout_signal, futures_ltp, engine, strategy)
-                                        elif filter_result:
-                                            # Legacy: boolean True means passed
-                                            self._handle_breakout(breakout_signal, futures_ltp, engine, strategy)
-                                        else:
-                                            # Filters failed (legacy boolean False)
-                                            self.stdout.write(self.style.WARNING(
-                                                f"⚠️  Breakout detected ({breakout_signal}) but momentum filters failed"
-                                            ))
-                                    else:
-                                        # Outside trading window: just log the breakout (for monitoring)
-                                        breakout_pct = ((futures_ltp - self.range_high) / self.range_high * 100) if breakout_signal == "BUY" else ((self.range_low - futures_ltp) / self.range_low * 100)
-                                        self.stdout.write(self.style.WARNING(
-                                            f"📊 Breakout detected ({breakout_signal}) but outside trading window (9:30 AM - 3:30 PM) | Price: ₹{futures_ltp:,.2f} | Breakout: {breakout_pct:+.2f}%"
-                                        ))
+                            # Note: Entry signals now come ONLY from Super Trend indicator (15-min Heikin Ashi candles)
+                            # The old breakout-based entry logic has been completely replaced
                             
                             # If in trade → check exit conditions (using option LTP)
                             if self.current_position:
@@ -649,11 +605,16 @@ class Command(BaseCommand):
                                             current_stoploss = Decimal(str(self.current_stoploss_pct))
                                             
                                             # Calculate stoploss price for direct comparison (more accurate)
+                                            # Note: current_stoploss is negative (e.g., -0.012 for -1.2%)
                                             if "CE" in position_side:  # BUY CALL - stoploss when price goes down
-                                                stoploss_price = entry_price * (Decimal('1') - current_stoploss)
+                                                # For CALL: stoploss = entry * (1 - abs(stoploss))
+                                                # Since current_stoploss is negative, we use: entry * (1 + current_stoploss)
+                                                stoploss_price = entry_price * (Decimal('1') + current_stoploss)
                                                 price_below_stoploss = option_ltp <= stoploss_price
                                             else:  # BUY PUT - stoploss when price goes up (PUT loses value when underlying goes up)
-                                                stoploss_price = entry_price * (Decimal('1') - current_stoploss)
+                                                # For PUT: same calculation (price goes down = loss)
+                                                # stoploss = entry * (1 + current_stoploss) where current_stoploss is negative
+                                                stoploss_price = entry_price * (Decimal('1') + current_stoploss)
                                                 price_below_stoploss = option_ltp <= stoploss_price
                                             
                                             # ✅ NEW: Calculate target in points (60 points)
@@ -730,7 +691,7 @@ class Command(BaseCommand):
                                                     f"(Entry: ₹{entry_price:.2f}, Profit: {pnl_points:.2f} pts, {pnl_pct*100:.2f}%)"
                                                 ))
                                                 self._simulate_exit(option_ltp, "TRAILING", engine)
-                                            # ✅ NEW: Check target in points (60 points)
+                                            # ✅ Check target in points (60 points) - PRIMARY TARGET
                                             elif option_ltp >= target_price:
                                                 pnl_points = option_ltp - entry_price
                                                 logger.info(f"✅ TARGET HIT: P&L={pnl_points:.2f} pts ({pnl_pct*100:.2f}%) >= Target={target_points} pts")
@@ -738,22 +699,30 @@ class Command(BaseCommand):
                                                     f"🎯 TARGET REACHED! Exiting at ₹{option_ltp:.2f} (Entry: ₹{entry_price:.2f}, Profit: {pnl_points:.2f} pts, {pnl_pct*100:.2f}%)"
                                                 ))
                                                 self._simulate_exit(option_ltp, "TARGET", engine)
-                                            elif pnl_pct >= Decimal(str(self.target_pct)):  # Fallback to percentage if points not hit
-                                                logger.info(f"✅ TARGET HIT: P&L%={pnl_pct*100:.2f}% >= Target%={self.target_pct*100:.2f}%")
-                                                self.stdout.write(self.style.SUCCESS(
-                                                    f"🎯 TARGET REACHED! Exiting at ₹{option_ltp:.2f} (Entry: ₹{entry_price:.2f}, Profit: {pnl_pct*100:.2f}%)"
-                                                ))
-                                                self._simulate_exit(option_ltp, "TARGET", engine)
-                                            elif pnl_pct <= -current_stoploss or price_below_stoploss:
+                                            # Note: Removed percentage fallback - using ONLY 60 points target
+                                            # Use price_below_stoploss (correctly calculated above) as primary check
+                                            # Note: current_stoploss is negative, so pnl_pct <= current_stoploss would be correct,
+                                            # but price_below_stoploss is more accurate (handles both CALL and PUT correctly)
+                                            elif price_below_stoploss:
                                                 # Log stoploss details for debugging
                                                 logger.info(
                                                     f"Stoploss triggered: Entry=₹{entry_price:.2f}, "
                                                     f"Stoploss Price=₹{stoploss_price:.2f}, "
                                                     f"Current=₹{option_ltp:.2f}, "
                                                     f"P&L%={pnl_pct*100:.2f}%, "
-                                                    f"Stoploss%={current_stoploss*100:.2f}%"
+                                                    f"Stoploss%={current_stoploss*100:.2f}%, "
+                                                    f"Price below stoploss={price_below_stoploss}"
                                                 )
-                                                self._simulate_exit(option_ltp, "STOPLOSS", engine)
+                                                # Additional validation: only exit if price is actually below stoploss
+                                                if option_ltp <= stoploss_price:
+                                                    self._simulate_exit(option_ltp, "STOPLOSS", engine)
+                                                else:
+                                                    # This should never happen, but log if it does
+                                                    logger.error(
+                                                        f"⚠️ Stoploss condition triggered but price is above stoploss! "
+                                                        f"Entry=₹{entry_price:.2f}, Stoploss=₹{stoploss_price:.2f}, "
+                                                        f"Current=₹{option_ltp:.2f}, P&L%={pnl_pct*100:.2f}%"
+                                                    )
                                             # ✅ NEW: Conditional time-based exit (if profit < threshold after 12 minutes)
                                             elif self._check_time_based_exit(entry, current_time_ist, pnl_pct):
                                                 logger.info(
@@ -774,16 +743,44 @@ class Command(BaseCommand):
                         if futures_ltp:
                             status_parts.append(f"Futures: ₹{futures_ltp:,.2f}")
                             
-                            # ✅ NEW: Show Super Trend status
+                            # ✅ NEW: Show candle count and Super Trend status
+                            candle_count = len(self.candle_aggregator.candles)
+                            ha_candle_count = len(self.heikin_ashi_calc.ha_candles) if hasattr(self.heikin_ashi_calc, 'ha_candles') else 0
+                            
+                            # Show candle collection status
+                            if candle_count > 0:
+                                status_parts.append(f"Candles: {candle_count}")
+                                if ha_candle_count > 0:
+                                    status_parts.append(f"HA: {ha_candle_count}")
+                            else:
+                                # Show we're collecting data for first candle
+                                status_parts.append("⏳ Collecting candles...")
+                            
+                            # Show Super Trend status
                             current_st = self.super_trend_calc.get_last_super_trend()
                             if current_st:
                                 st_color_emoji = "🟢" if current_st['color'] == 'GREEN' else "🔴"
-                                status_parts.append(f"Super Trend: {st_color_emoji} ₹{current_st['value']:,.2f} ({current_st['color']})")
-                            
-                            # Show candle count
-                            candle_count = len(self.candle_aggregator.candles)
-                            if candle_count > 0:
-                                status_parts.append(f"Candles: {candle_count}")
+                                # Get HA close for comparison
+                                last_ha = self.heikin_ashi_calc.get_last_candle()
+                                last_candle = self.candle_aggregator.get_last_candle()
+                                ha_close_str = ""
+                                candle_time_str = ""
+                                if last_ha:
+                                    ha_close = last_ha['ha_close']
+                                    st_value = current_st['value']
+                                    # Show comparison: HA Close vs ST Value
+                                    comparison = ">" if ha_close > st_value else "<="
+                                    ha_close_str = f" | HA Close: ₹{ha_close:,.2f} {comparison} ST"
+                                if last_candle:
+                                    candle_time = last_candle['timestamp'].strftime('%H:%M')
+                                    candle_time_str = f" (Last: {candle_time})"
+                                status_parts.append(f"Super Trend: {st_color_emoji} ₹{current_st['value']:,.2f} ({current_st['color']}){ha_close_str}{candle_time_str}")
+                            elif candle_count > 0:
+                                # Show progress toward Super Trend calculation
+                                st_candles_needed = self.super_trend_calc.atr_period + 1  # ATR period + 1
+                                if ha_candle_count < st_candles_needed:
+                                    remaining = st_candles_needed - ha_candle_count
+                                    status_parts.append(f"⏳ Super Trend: Need {remaining} more candles (ATR period: {self.super_trend_calc.atr_period})")
                             
                             # Calculate and show momentum indicators if we have enough data (for reference)
                             if len(self.price_history) >= 20:
@@ -975,10 +972,10 @@ class Command(BaseCommand):
             position_side: "BUY_CE" or "BUY_PE"
         """
         # Calculate current profit percentage
-        if "CE" in position_side:  # BUY CALL - profit when price goes up
-            pnl_pct = (current_price - entry_price) / entry_price
-        else:  # BUY PUT - profit when price goes down
-            pnl_pct = (entry_price - current_price) / entry_price
+        # For both CALL and PUT: profit when option price goes up (we always BUY options)
+        # For PUT: when underlying goes DOWN, PUT option price goes UP (profit)
+        # So the formula is the same for both: (current_price - entry_price) / entry_price
+        pnl_pct = (current_price - entry_price) / entry_price
         
         # Determine new stoploss level based on profit
         new_stoploss_pct = None
@@ -1499,7 +1496,9 @@ class Command(BaseCommand):
         lot_size = self.lot_size
         
         # Calculate target and stoploss prices
-        target_price = option_ltp * (Decimal('1') + Decimal(str(self.target_pct)))
+        # Target: 60 points (not percentage)
+        target_price_points = option_ltp + self.target_points  # Target in points
+        target_price_pct = option_ltp * (Decimal('1') + Decimal(str(self.target_pct)))  # For display only
         stoploss_price = option_ltp * (Decimal('1') - Decimal(str(self.stoploss_pct)))
         
         self.stdout.write(self.style.SUCCESS(
@@ -1518,7 +1517,7 @@ class Command(BaseCommand):
             f"   Position: {num_lots} lot(s) × {self.lot_size} = {total_units} units | Investment: ₹{total_investment:,.2f}"
         ))
         self.stdout.write(self.style.SUCCESS(
-            f"   Target: ₹{target_price:,.2f} (+{self.target_pct*100:.2f}%) | Stoploss: ₹{stoploss_price:,.2f} (-{self.stoploss_pct*100:.2f}%)"
+            f"   Target: ₹{target_price_points:,.2f} (+{self.target_points} pts) | Stoploss: ₹{stoploss_price:,.2f} (-{self.stoploss_pct*100:.2f}%)"
         ))
         if momentum_info:
             self.stdout.write(self.style.SUCCESS(
@@ -1608,6 +1607,155 @@ class Command(BaseCommand):
         except Exception as e:
             logger.error(f"Error restoring open position: {e}")
             self.current_position = None
+    
+    def _load_historical_candles(self, engine, strategy):
+        """
+        Load historical candles from previous trading day to initialize Super Trend
+        This allows Super Trend to calculate immediately at market open (like mobile chart)
+        """
+        try:
+            from datetime import datetime, timedelta, date
+            from trading.utils.expiry_functions import get_banknifty_futures_symbol
+            
+            # Get yesterday's date (skip weekends)
+            today = get_ist_now().date()
+            yesterday = today - timedelta(days=1)
+            # Skip weekends - go back to Friday if today is Monday
+            while yesterday.weekday() >= 5:  # Saturday = 5, Sunday = 6
+                yesterday = yesterday - timedelta(days=1)
+            
+            # Try to get Alice Blue client (use engine's client if available)
+            alice = None
+            if hasattr(engine, 'data_service') and hasattr(engine.data_service, 'alice_client'):
+                alice = engine.data_service.alice_client
+            
+            if not alice:
+                # Create new Alice Blue client
+                try:
+                    from alice_blue import AliceBlue
+                    from strategy.broker.alice_client import USER_ID, API_KEY
+                    
+                    # Get session ID
+                    from strategy.broker.alice_client import get_session_id, get_encryption_key
+                    enc_key = get_encryption_key(USER_ID)
+                    session_id = get_session_id(USER_ID, API_KEY, enc_key)
+                    
+                    alice = AliceBlue(
+                        username=USER_ID,
+                        session_id=session_id,
+                        master_contracts_to_download=['NFO']
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not get Alice Blue session: {e}")
+                    return
+            
+            # Get BankNifty futures instrument for yesterday
+            # Use search to find futures
+            all_instruments = alice.search_instruments('NFO', 'BANKNIFTY')
+            banknifty_futures = [
+                inst for inst in all_instruments
+                if inst.symbol.startswith('BANKNIFTY') and inst.symbol.endswith('F')
+            ]
+            
+            if not banknifty_futures:
+                logger.warning("Could not find BankNifty futures instrument")
+                return
+            
+            # Get nearest expiry (first one should be current month)
+            instrument = banknifty_futures[0]
+            
+            # Fetch 1-minute data from yesterday (last 4-5 hours of trading)
+            # We need last 10-15 candles (150-225 minutes)
+            # Fetch from 12:00 PM to 3:30 PM to ensure we get enough candles
+            start_time = datetime.combine(yesterday, datetime.min.time()).replace(hour=12, minute=0)  # 12:00 PM
+            end_time = datetime.combine(yesterday, datetime.min.time()).replace(hour=15, minute=30)  # 3:30 PM
+            
+            self.stdout.write(self.style.SUCCESS(
+                f"📊 Loading historical candles from {yesterday.strftime('%Y-%m-%d')} (12:00 PM - 3:30 PM)..."
+            ))
+            
+            # Fetch historical data
+            from alice_blue import HistoricalDataType
+            historical_data = alice.historical_data(
+                instrument=instrument,
+                ffrom=start_time,
+                to=end_time,
+                type=HistoricalDataType.Minute
+            )
+            
+            if not historical_data:
+                logger.warning("No historical data returned")
+                return
+            
+            # Convert to DataFrame
+            import pandas as pd
+            if isinstance(historical_data, dict):
+                if 'result' in historical_data:
+                    df = pd.DataFrame(historical_data['result'])
+                else:
+                    df = pd.DataFrame(historical_data)
+            else:
+                df = pd.DataFrame(historical_data)
+            
+            if df.empty:
+                logger.warning("Historical data is empty")
+                return
+            
+            # Convert to 15-minute candles
+            df['datetime'] = pd.to_datetime(df.get('datetime', df.get('time', df.index)))
+            df = df.set_index('datetime')
+            df_15min = df.resample('15min').agg({
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            }).dropna()
+            
+            # Get last 10-15 candles (we need at least 10 for ATR period 10)
+            candles_to_load = min(15, len(df_15min))
+            df_15min = df_15min.tail(candles_to_load)
+            
+            if len(df_15min) < 10:
+                logger.warning(f"Not enough historical candles: {len(df_15min)} (need at least 10)")
+                return
+            
+            # Initialize calculators with historical candles
+            candles_loaded = 0
+            for idx, row in df_15min.iterrows():
+                candle = {
+                    'open': Decimal(str(row['open'])),
+                    'high': Decimal(str(row['high'])),
+                    'low': Decimal(str(row['low'])),
+                    'close': Decimal(str(row['close'])),
+                    'timestamp': idx.to_pydatetime(),
+                    'volume': int(row.get('volume', 0))
+                }
+                
+                # Add to aggregator (for tracking)
+                self.candle_aggregator.candles.append(candle)
+                
+                # Convert to Heikin Ashi
+                ha_candle = self.heikin_ashi_calc.add_candle(candle)
+                
+                # Calculate Super Trend (will return None until we have enough candles)
+                super_trend = self.super_trend_calc.add_candle(ha_candle)
+                
+                if super_trend:
+                    # Update previous Super Trend
+                    self.previous_super_trend = super_trend
+                    candles_loaded += 1
+            
+            self.stdout.write(self.style.SUCCESS(
+                f"✅ Loaded {candles_loaded} historical candles. Super Trend ready at market open!"
+            ))
+            logger.info(f"Loaded {candles_loaded} historical candles for Super Trend initialization")
+            
+        except ImportError as e:
+            logger.warning(f"Could not import required modules for historical data: {e}")
+        except Exception as e:
+            logger.warning(f"Error loading historical candles: {e}")
+            # Don't raise - allow strategy to continue without historical data
     
     def _calculate_pnl(self, entry_price: Decimal, exit_price: Decimal, side: str, lot_size: int = 35) -> Decimal:
         """

@@ -5,6 +5,7 @@ from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse
 from trading.models import Strategy, Signal, Order, TradeLog, DailyStats
+from trading.models_ha import HeikinAshiCandle
 
 
 @admin.register(Strategy)
@@ -228,4 +229,43 @@ class DailyStatsAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+
+@admin.register(HeikinAshiCandle)
+class HeikinAshiCandleAdmin(admin.ModelAdmin):
+    """Admin interface for Heikin-Ashi Candles"""
+    list_display = ['symbol', 'timestamp', 'color_badge', 'trend', 'ha_open', 'ha_close', 
+                   'ha_high', 'ha_low', 'original_close', 'created_at']
+    list_filter = ['symbol', 'color', 'trend', 'timestamp']
+    search_fields = ['symbol']
+    readonly_fields = ['created_at', 'updated_at']
+    date_hierarchy = 'timestamp'
+    list_per_page = 50
+    
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('symbol', 'timestamp', 'color', 'trend')
+        }),
+        ('Original OHLC', {
+            'fields': ('original_open', 'original_high', 'original_low', 'original_close')
+        }),
+        ('Heikin-Ashi Values', {
+            'fields': ('ha_open', 'ha_close', 'ha_high', 'ha_low')
+        }),
+        ('Volume', {
+            'fields': ('volume',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def color_badge(self, obj):
+        """Display color badge"""
+        if obj.color == 'green':
+            return format_html('<span style="background-color: #28a745; color: #fff; padding: 3px 8px; border-radius: 3px; font-size: 11px;">🟢 GREEN</span>')
+        else:
+            return format_html('<span style="background-color: #dc3545; color: #fff; padding: 3px 8px; border-radius: 3px; font-size: 11px;">🔴 RED</span>')
+    color_badge.short_description = 'Color'
 

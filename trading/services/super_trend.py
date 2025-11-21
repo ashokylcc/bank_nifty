@@ -8,13 +8,44 @@ from decimal import Decimal
 logger = logging.getLogger(__name__)
 
 
+def calculate_rma(values: List[Decimal], period: int) -> Optional[Decimal]:
+    """
+    Calculate RMA (Wilder's Smoothing / Running Moving Average)
+    This is what TradingView uses for ATR calculation
+    
+    Formula:
+    - RMA = (RMA_prev * (period - 1) + current_value) / period
+    - First RMA = SMA of first period values
+    
+    Args:
+        values: List of values to smooth
+        period: RMA period
+    
+    Returns:
+        Decimal: RMA value or None if insufficient data
+    """
+    if len(values) < period:
+        return None
+    
+    # First RMA = SMA of first period values
+    sma = sum(values[:period]) / Decimal(str(period))
+    rma = sma
+    
+    # Apply RMA formula for remaining values
+    for i in range(period, len(values)):
+        rma = (rma * Decimal(str(period - 1)) + values[i]) / Decimal(str(period))
+    
+    return rma
+
+
 def calculate_atr(candles: List[Dict], period: int = 14) -> Optional[Decimal]:
     """
-    Calculate Average True Range (ATR) from Heikin Ashi candles
+    Calculate Average True Range (ATR) from Heikin Ashi candles using RMA
+    This matches TradingView's ATR calculation exactly
     
     Formula:
     - TR = max(High - Low, |High - Prev_Close|, |Low - Prev_Close|)
-    - ATR = Average of last N TR values
+    - ATR = RMA(TR, period)  [NOT EMA, NOT SMA - RMA is Wilder's Smoothing]
     
     Args:
         candles: List of Heikin Ashi candles
@@ -48,9 +79,8 @@ def calculate_atr(candles: List[Dict], period: int = 14) -> Optional[Decimal]:
     if len(true_ranges) < period:
         return None
     
-    # Calculate ATR (simple average of last N TR values)
-    recent_trs = true_ranges[-period:]
-    atr = sum(recent_trs) / Decimal(str(period))
+    # Calculate ATR using RMA (Wilder's Smoothing) - matches TradingView
+    atr = calculate_rma(true_ranges, period)
     
     return atr
 
@@ -62,21 +92,21 @@ def calculate_super_trend(
     multiplier: Decimal = Decimal('3.0')
 ) -> Dict:
     """
-    Calculate Super Trend value and signal
+    Calculate Super Trend value and signal - EXACT TradingView formula
     
-    Formula:
+    Formula (TradingView):
     - Basic Upper Band = (High + Low) / 2 + (Multiplier × ATR)
     - Basic Lower Band = (High + Low) / 2 - (Multiplier × ATR)
     - Final Super Trend:
-      - If previous ST was above price: ST = Lower Band
-      - Else: ST = Upper Band
-    - Color:
+      - If previous ST was RED: Final ST = max(lower_band, previous_ST)
+      - If previous ST was GREEN: Final ST = min(upper_band, previous_ST)
+    - Color (flips ONLY when candle closes beyond bands):
       - If Close > ST: GREEN (BUY)
-      - If Close < ST: RED (SELL)
+      - If Close <= ST: RED (SELL)
     
     Args:
         ha_candle: Current Heikin Ashi candle
-        atr: ATR value
+        atr: ATR value (calculated using RMA)
         previous_st: Previous Super Trend dict (with 'value' and 'color')
         multiplier: Super Trend multiplier (default: 3.0)
     
@@ -87,36 +117,33 @@ def calculate_super_trend(
     low = Decimal(str(ha_candle['ha_low']))
     close = Decimal(str(ha_candle['ha_close']))
     
-    # Calculate basic bands
+    # Calculate basic bands (using HA High and HA Low)
     hl_avg = (high + low) / Decimal('2')
     upper_band = hl_avg + (multiplier * atr)
     lower_band = hl_avg - (multiplier * atr)
     
-    # Calculate final Super Trend
+    # Calculate final Super Trend (TradingView exact formula)
     if previous_st:
         prev_st_value = Decimal(str(previous_st['value']))
         prev_st_color = previous_st['color']
         
-        # Determine which band to use
+        # TradingView Super Trend logic:
+        # If previous was RED: Final ST = max(lower_band, previous_ST)
+        # This prevents ST from going up too quickly when trend is down
         if prev_st_color == 'RED':
-            # Previous was RED (below price), use Lower Band
-            st_value = lower_band
+            st_value = max(lower_band, prev_st_value)
         else:
-            # Previous was GREEN (above price), use Upper Band
-            st_value = upper_band
-        
-        # Ensure ST doesn't flip too easily
-        if prev_st_color == 'RED' and close > prev_st_value:
-            # Price crossed above previous ST, switch to Upper Band
-            st_value = upper_band
-        elif prev_st_color == 'GREEN' and close < prev_st_value:
-            # Price crossed below previous ST, switch to Lower Band
-            st_value = lower_band
+            # Previous was GREEN: Final ST = min(upper_band, previous_ST)
+            # This prevents ST from going down too quickly when trend is up
+            st_value = min(upper_band, prev_st_value)
     else:
-        # First calculation: use Upper Band
+        # First calculation: use Upper Band (TradingView default)
         st_value = upper_band
     
-    # Determine color
+    # Determine color based on close price relative to Super Trend
+    # TradingView: Color flips when close crosses ST value
+    # If close > ST: GREEN (uptrend, price above Super Trend)
+    # If close <= ST: RED (downtrend, price below or equal to Super Trend)
     if close > st_value:
         color = 'GREEN'
         signal = 'BUY'
@@ -194,8 +221,8 @@ class SuperTrendCalculator:
         """
         self.ha_candles.append(ha_candle)
         
-        # Keep only last 100 candles
-        if len(self.ha_candles) > 100:
+        # Keep only last 200 candles for accuracy
+        if len(self.ha_candles) > 200:
             self.ha_candles.pop(0)
         
         # Need at least (atr_period + 1) candles for ATR
@@ -224,8 +251,8 @@ class SuperTrendCalculator:
         
         self.super_trends.append(super_trend)
         
-        # Keep only last 100 Super Trends
-        if len(self.super_trends) > 100:
+        # Keep only last 200 Super Trends
+        if len(self.super_trends) > 200:
             self.super_trends.pop(0)
         
         return super_trend

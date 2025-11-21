@@ -4,6 +4,7 @@ Heikin Ashi candle calculation service
 import logging
 from typing import List, Dict, Optional
 from decimal import Decimal
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +47,19 @@ def calculate_heikin_ashi(regular_candle: Dict, previous_ha_candle: Optional[Dic
     ha_high = max(high_price, ha_open, ha_close)
     ha_low = min(low_price, ha_open, ha_close)
     
+    # Determine HA color based on HA_Close vs HA_Open (TradingView style)
+    # GREEN when HA_C > HA_O (uptrend), RED when HA_C < HA_O (downtrend)
+    if ha_close > ha_open:
+        ha_color = "GREEN"
+    else:
+        ha_color = "RED"
+    
     ha_candle = {
         'ha_open': ha_open,
         'ha_high': ha_high,
         'ha_low': ha_low,
         'ha_close': ha_close,
+        'ha_color': ha_color,  # TradingView-style HA color
         'timestamp': regular_candle['timestamp'],
         'start_time': regular_candle.get('start_time'),
         'end_time': regular_candle.get('end_time'),
@@ -97,6 +106,7 @@ class HeikinAshiCalculator:
     def add_candle(self, regular_candle: Dict) -> Dict:
         """
         Add regular candle and convert to Heikin Ashi
+        Detects gaps (overnight, different trading day) and resets HA calculation
         
         Args:
             regular_candle: Regular OHLC candle
@@ -104,13 +114,75 @@ class HeikinAshiCalculator:
         Returns:
             Dict: Heikin Ashi candle
         """
-        previous_ha = self.ha_candles[-1] if self.ha_candles else None
+        # Check for gap: if there's a previous HA candle, check time difference
+        previous_ha = None
+        if self.ha_candles:
+            last_ha = self.ha_candles[-1]
+            last_ha_time = last_ha.get('end_time') or last_ha.get('timestamp')
+            current_candle_time = regular_candle.get('end_time') or regular_candle.get('timestamp')
+            
+            if last_ha_time and current_candle_time:
+                try:
+                    # Ensure both are datetime objects
+                    from trading.utils.time_helpers import IST
+                    
+                    if not isinstance(last_ha_time, datetime):
+                        if isinstance(last_ha_time, str):
+                            try:
+                                last_ha_time = datetime.fromisoformat(last_ha_time.replace('Z', '+00:00'))
+                            except:
+                                from dateutil import parser
+                                last_ha_time = parser.parse(last_ha_time)
+                        if last_ha_time.tzinfo is None:
+                            last_ha_time = IST.localize(last_ha_time)
+                    
+                    if not isinstance(current_candle_time, datetime):
+                        if isinstance(current_candle_time, str):
+                            try:
+                                current_candle_time = datetime.fromisoformat(current_candle_time.replace('Z', '+00:00'))
+                            except:
+                                from dateutil import parser
+                                current_candle_time = parser.parse(current_candle_time)
+                        if current_candle_time.tzinfo is None:
+                            current_candle_time = IST.localize(current_candle_time)
+                    
+                    # Calculate time difference
+                    if isinstance(last_ha_time, datetime) and isinstance(current_candle_time, datetime):
+                        time_diff = current_candle_time - last_ha_time
+                        
+                        # Check for different trading days (date change)
+                        last_date = last_ha_time.date()
+                        current_date = current_candle_time.date()
+                        different_day = (last_date != current_date)
+                        
+                        # If gap is more than 2 hours OR different trading day, reset HA
+                        if different_day or time_diff > timedelta(hours=2):
+                            logger.info(
+                                f"🔄 Gap detected (Date: {last_date} → {current_date}, "
+                                f"Time diff: {time_diff}), resetting HA calculation for new trading session"
+                            )
+                            previous_ha = None  # Reset HA - will use first candle formula
+                        else:
+                            previous_ha = last_ha
+                    else:
+                        # If not datetime objects, use previous HA (fallback)
+                        previous_ha = last_ha
+                except Exception as e:
+                    logger.warning(f"Error checking gap, using previous HA: {e}")
+                    previous_ha = last_ha
+            else:
+                # If timestamps missing, use previous HA (fallback)
+                previous_ha = last_ha
+        else:
+            # No previous HA candles
+            previous_ha = None
+        
         ha_candle = calculate_heikin_ashi(regular_candle, previous_ha)
         
         self.ha_candles.append(ha_candle)
         
-        # Keep only last 100 candles
-        if len(self.ha_candles) > 100:
+        # Keep only last 200 candles for accuracy
+        if len(self.ha_candles) > 200:
             self.ha_candles.pop(0)
         
         return ha_candle
