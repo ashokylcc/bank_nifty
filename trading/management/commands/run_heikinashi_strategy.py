@@ -41,13 +41,14 @@ TRADE_END_TIME = dt_time(15, 30)  # 3:30 PM (for testing - allows full trading d
 class HeikinAshiStrategy:
     """Heikin Ashi strategy implementation"""
     
-    def __init__(self, dry_run: bool = True, strategy_name: str = "Heikin Ashi Strategy", debug: bool = False, candle_source: str = "futures"):
+    def __init__(self, dry_run: bool = True, strategy_name: str = "Heikin Ashi Strategy", debug: bool = False, candle_source: str = "futures", stdout_callback=None):
         self.dry_run = dry_run
         self.strategy_name = strategy_name
         self.strategy_obj = None
         self.debug = debug
         self.debug_log_file = None
         self.candle_source = candle_source  # "futures" or "spot"
+        self.stdout_callback = stdout_callback  # Callback to write to terminal
         
         # Indicators
         self.candle_aggregator = CandleAggregator(candle_interval_minutes=15)
@@ -510,11 +511,29 @@ class HeikinAshiStrategy:
                 except Exception as e:
                     logger.error(f"Failed to save trade log on entry: {e}")
             
-            logger.info(
+            # Log entry
+            entry_msg = (
                 f"{'[DRY-RUN]' if self.dry_run else '[LIVE]'} "
                 f"ENTRY: {side} {option_symbol} @ ₹{option_ltp:.2f} "
                 f"(Futures: ₹{futures_ltp:.2f}, Strike: {strike})"
             )
+            logger.info(entry_msg)
+            
+            # Display clear entry message in terminal
+            if self.stdout_callback:
+                entry_display = (
+                    f"\n{'='*80}\n"
+                    f"✅ ENTRY EXECUTED\n"
+                    f"{'='*80}\n"
+                    f"Signal: {side}\n"
+                    f"Option: {option_symbol}\n"
+                    f"Entry Price: ₹{option_ltp:.2f}\n"
+                    f"Futures LTP: ₹{futures_ltp:.2f}\n"
+                    f"Strike: {strike}\n"
+                    f"Entry Time: {entry_time.strftime('%Y-%m-%d %H:%M:%S')} IST\n"
+                    f"{'='*80}\n"
+                )
+                self.stdout_callback(entry_display)
             
             return True
             
@@ -634,6 +653,45 @@ class HeikinAshiStrategy:
         )
         pnl_percent = ((exit_premium - entry['entry_premium']) / entry['entry_premium'] * 100) if entry['entry_premium'] > 0 else Decimal('0')
         
+        # Calculate detailed metrics for exit message
+        futures_move = exit_future_price - entry['entry_future_price']
+        option_move = exit_premium - entry['entry_premium']
+        option_move_pct = ((exit_premium - entry['entry_premium']) / entry['entry_premium'] * 100) if entry['entry_premium'] > 0 else Decimal('0')
+        
+        # Calculate specific trigger values for detailed explanation
+        exit_details = ""
+        if exit_reason == 'FUTURES_TARGET':
+            if 'CE' in entry['side']:
+                futures_profit = exit_future_price - entry['entry_future_price']
+            else:
+                futures_profit = entry['entry_future_price'] - exit_future_price
+            exit_details = f"Futures moved {futures_profit:.2f} points (Target: +{TARGET_POINTS} points)"
+        elif exit_reason == 'OPTION_TARGET':
+            exit_details = f"Option gained {option_move_pct:.2f}% (Target: +{OPTION_TARGET_PCT*100:.0f}%)"
+        elif exit_reason == 'TREND_REVERSAL':
+            current_ha = self.heikin_ashi_calc.get_last_candle()
+            if current_ha:
+                ha_color = current_ha.get('ha_color', 'RED' if current_ha['ha_close'] < current_ha['ha_open'] else 'GREEN')
+                if 'CE' in entry['side']:
+                    exit_details = f"HA turned RED (downtrend reversal) - CALL exit"
+                else:
+                    exit_details = f"HA turned GREEN (uptrend reversal) - PUT exit"
+        elif exit_reason == 'STOPLOSS':
+            option_loss_pct = ((entry['entry_premium'] - exit_premium) / entry['entry_premium'] * 100) if entry['entry_premium'] > 0 else Decimal('0')
+            if 'CE' in entry['side']:
+                futures_loss = entry['entry_future_price'] - exit_future_price
+            else:
+                futures_loss = exit_future_price - entry['entry_future_price']
+            
+            if option_loss_pct >= STOPLOSS_OPTION_PCT * 100:
+                exit_details = f"Option lost {option_loss_pct:.2f}% (Stop-loss: -{STOPLOSS_OPTION_PCT*100:.0f}%)"
+            else:
+                exit_details = f"Futures moved {futures_loss:.2f} points against (Stop-loss: -{STOPLOSS_FUTURES_POINTS} points)"
+        elif exit_reason == 'TIME':
+            exit_details = f"Square-off time reached ({SQUARE_OFF_TIME.strftime('%H:%M')} IST)"
+        else:
+            exit_details = f"Exit reason: {exit_reason}"
+        
         # Place exit order (or simulate)
         if not self.dry_run:
             try:
@@ -714,10 +772,56 @@ class HeikinAshiStrategy:
             except Exception as e:
                 logger.error(f"Failed to update trade log on exit: {e}")
         
-        logger.info(
+        # Map exit reasons to clear explanations
+        exit_reason_explanations = {
+            'FUTURES_TARGET': f'Futures profit target reached (+{TARGET_POINTS} points)',
+            'OPTION_TARGET': f'Option profit target reached (+{OPTION_TARGET_PCT*100:.0f}%)',
+            'TREND_REVERSAL': 'Heikin-Ashi trend reversal detected',
+            'STOPLOSS': f'Stop-loss triggered',
+            'TIME': f'Time-based exit (Square-off at {SQUARE_OFF_TIME.strftime("%H:%M")} IST)'
+        }
+        
+        # Get detailed exit information
+        exit_explanation = exit_reason_explanations.get(exit_reason, exit_reason)
+        
+        # Log exit
+        exit_msg = (
             f"{'[DRY-RUN]' if self.dry_run else '[LIVE]'} "
             f"EXIT: {exit_reason} | P&L: ₹{pnl_amount:.2f} ({pnl_percent:.2f}%)"
         )
+        logger.info(exit_msg)
+        
+        # Display clear exit message in terminal
+        if self.stdout_callback:
+            # Determine P&L color/style
+            pnl_sign = "✅" if pnl_amount >= 0 else "❌"
+            pnl_color = "PROFIT" if pnl_amount >= 0 else "LOSS"
+            
+            exit_display = (
+                f"\n{'='*80}\n"
+                f"🚪 EXIT EXECUTED\n"
+                f"{'='*80}\n"
+                f"Exit Reason: {exit_reason} - {exit_explanation}\n"
+                f"Details: {exit_details}\n"
+                f"{'-'*80}\n"
+                f"Option: {entry['option_symbol']}\n"
+                f"Side: {entry['side']}\n"
+                f"Entry Price: ₹{entry['entry_premium']:.2f}\n"
+                f"Exit Price: ₹{exit_premium:.2f}\n"
+                f"Option Move: ₹{option_move:.2f} ({option_move_pct:+.2f}%)\n"
+                f"{'-'*80}\n"
+                f"Entry Futures: ₹{entry['entry_future_price']:.2f}\n"
+                f"Exit Futures: ₹{exit_future_price:.2f}\n"
+                f"Futures Move: {futures_move:+.2f} points\n"
+                f"{'-'*80}\n"
+                f"Entry Time: {entry['entry_time'].strftime('%Y-%m-%d %H:%M:%S')} IST\n"
+                f"Exit Time: {exit_time.strftime('%Y-%m-%d %H:%M:%S')} IST\n"
+                f"Duration: {exit_time - entry['entry_time']}\n"
+                f"{'-'*80}\n"
+                f"{pnl_sign} P&L: ₹{pnl_amount:.2f} ({pnl_percent:+.2f}%) - {pnl_color}\n"
+                f"{'='*80}\n"
+            )
+            self.stdout_callback(exit_display)
         
         # Clear position
         self.current_position = None
@@ -959,13 +1063,14 @@ class Command(BaseCommand):
             defaults={'enabled': True}
         )
         
-        # Initialize strategy
+        # Initialize strategy with stdout callback for terminal messages
         candle_source = options.get('candle_source', 'futures')
         strategy = HeikinAshiStrategy(
             dry_run=dry_run, 
             strategy_name="Heikin Ashi Strategy", 
             debug=debug,
-            candle_source=candle_source
+            candle_source=candle_source,
+            stdout_callback=lambda msg: self.stdout.write(self.style.SUCCESS(msg))
         )
         strategy.strategy_obj = strategy_obj
         
@@ -1034,13 +1139,55 @@ class Command(BaseCommand):
                     status_parts.append(f"Futures: ₹{strategy.futures_ltp:,.2f}")
                 
                 # Show Heikin-Ashi indicator (ONLY indicator used)
-                last_ha = strategy.heikin_ashi_calc.get_last_candle()
+                # First, try to get current forming candle's HA color (matches chart)
+                current_forming_candle = strategy.candle_aggregator.get_current_forming_candle()
+                current_ha_color = None
                 
-                if last_ha:
-                    # Get HA color (TradingView style: GREEN when HA_C > HA_O, RED when HA_C < HA_O)
-                    ha_color = last_ha.get('ha_color', 'RED' if last_ha['ha_close'] < last_ha['ha_open'] else 'GREEN')
-                    ha_emoji = "🟢" if ha_color == 'GREEN' else "🔴"
-                    status_parts.append(f"HA: {ha_emoji} {ha_color}")
+                if current_forming_candle and strategy.futures_ltp:
+                    # Calculate HA for current forming candle
+                    from trading.services.heikin_ashi import calculate_heikin_ashi
+                    # Get previous HA candle for continuity
+                    previous_ha = strategy.heikin_ashi_calc.get_last_candle()
+                    previous_ha_dict = None
+                    if previous_ha:
+                        previous_ha_dict = {
+                            'ha_open': previous_ha['ha_open'],
+                            'ha_close': previous_ha['ha_close'],
+                        }
+                    
+                    # Calculate HA for current forming candle
+                    current_ha_candle = calculate_heikin_ashi(current_forming_candle, previous_ha_dict)
+                    current_ha_open = current_ha_candle['ha_open']
+                    current_ha_close = current_ha_candle['ha_close']
+                    
+                    # Determine color
+                    if current_ha_close > current_ha_open:
+                        current_ha_color = "GREEN"
+                    else:
+                        current_ha_color = "RED"
+                
+                # Fallback to last completed candle if no forming candle
+                if current_ha_color is None:
+                    last_ha = strategy.heikin_ashi_calc.get_last_candle()
+                    if last_ha:
+                        # Get HA color (TradingView style: GREEN when HA_C > HA_O, RED when HA_C < HA_O)
+                        ha_open = last_ha['ha_open']
+                        ha_close = last_ha['ha_close']
+                        stored_color = last_ha.get('ha_color')
+                        
+                        # Recalculate color to ensure it's correct (fixes any stored incorrect values)
+                        if ha_close > ha_open:
+                            current_ha_color = "GREEN"
+                        else:
+                            current_ha_color = "RED"
+                        
+                        # If stored color differs, log a warning
+                        if stored_color and stored_color != current_ha_color:
+                            logger.warning(f"⚠️ HA color mismatch: stored={stored_color}, calculated={current_ha_color} (HA_C={ha_close}, HA_O={ha_open})")
+                
+                if current_ha_color:
+                    ha_emoji = "🟢" if current_ha_color == 'GREEN' else "🔴"
+                    status_parts.append(f"HA: {ha_emoji} {current_ha_color}")
                 else:
                     status_parts.append("HA: ⏳ Initializing...")
                 

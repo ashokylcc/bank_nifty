@@ -195,6 +195,47 @@ class CandleAggregator:
         """Get last N candles"""
         return self.candles[-count:] if len(self.candles) >= count else self.candles
     
+    def get_current_forming_candle(self) -> Optional[Dict]:
+        """
+        Get the current forming (incomplete) candle
+        
+        Returns:
+            Dict: Current forming candle with OHLC based on current LTP buffer, or None if no data
+        """
+        if not self.ltp_buffer or self.current_candle_start is None:
+            return None
+        
+        # Calculate OHLC from current buffer
+        ltps = [item['ltp'] for item in self.ltp_buffer]
+        open_price = ltps[0]
+        close_price = ltps[-1]  # Current LTP is the close
+        high_price = max(ltps)
+        low_price = min(ltps)
+        
+        # Use current candle start time
+        start_time = self.current_candle_start
+        
+        # Current time as end time (candle is still forming)
+        end_time = get_ist_now()
+        
+        # Ensure timestamps are in IST
+        if start_time.tzinfo is None:
+            start_time = IST.localize(start_time)
+        if end_time.tzinfo is None:
+            end_time = IST.localize(end_time)
+        
+        return {
+            'open': open_price,
+            'high': high_price,
+            'low': low_price,
+            'close': close_price,
+            'timestamp': end_time,
+            'start_time': start_time,
+            'end_time': end_time,
+            'volume': len(self.ltp_buffer),
+            'is_closed': False  # Mark as forming/incomplete
+        }
+    
     def get_current_period_ltps(self) -> List[Decimal]:
         """Get LTPs for current incomplete period"""
         return [item['ltp'] for item in self.ltp_buffer]

@@ -196,6 +196,10 @@ class TradeLog(models.Model):
         ('MARKET_CLOSE', 'Market Close'),
         ('MANUAL', 'Manual Exit'),
         ('TRAILING', 'Trailing Stoploss'),
+        # Strategy-specific detailed reasons
+        ('FUTURES_TARGET', 'Futures Target Hit'),
+        ('OPTION_TARGET', 'Option Target Hit'),
+        ('TREND_REVERSAL', 'HA Trend Reversal'),
     ]
     
     strategy = models.ForeignKey(Strategy, on_delete=models.CASCADE, related_name='trades')

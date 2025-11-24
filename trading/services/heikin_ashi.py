@@ -48,7 +48,8 @@ def calculate_heikin_ashi(regular_candle: Dict, previous_ha_candle: Optional[Dic
     ha_low = min(low_price, ha_open, ha_close)
     
     # Determine HA color based on HA_Close vs HA_Open (TradingView style)
-    # GREEN when HA_C > HA_O (uptrend), RED when HA_C < HA_O (downtrend)
+    # GREEN when HA_Close > HA_Open (uptrend/bullish)
+    # RED when HA_Close < HA_Open (downtrend/bearish)
     if ha_close > ha_open:
         ha_color = "GREEN"
     else:
