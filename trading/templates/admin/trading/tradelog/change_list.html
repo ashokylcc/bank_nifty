@@ -1,0 +1,150 @@
+{% extends "admin/change_list.html" %}
+{% load i18n admin_urls static admin_list %}
+
+{% block extrastyle %}
+    {{ block.super }}
+    <style>
+        /* Hide default object tools row (Add button) */
+        .object-tools {
+            display: none;
+        }
+        .pnl-summary-value {
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .pnl-summary-value-positive {
+            color: #28a745;
+        }
+        .pnl-summary-value-negative {
+            color: #dc3545;
+        }
+        .custom-add-button {
+            margin: 10px 0 20px 0;
+        }
+        .custom-add-button .button {
+            background-color: #6c757d;
+            border-color: #6c757d;
+            color: #fff;
+            padding: 6px 14px;
+            border-radius: 4px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .custom-add-button .button:hover {
+            background-color: #5a6268;
+            border-color: #5a6268;
+            color: #fff;
+        }
+    </style>
+{% endblock %}
+
+{% block content_title %}
+    {{ block.super }}
+    {% if has_add_permission %}
+        <div class="custom-add-button">
+            <a class="button" href="{% url cl.opts|admin_urlname:'add' %}">{% trans "Add Trade Log" %}</a>
+        </div>
+    {% endif %}
+    <div style="clear: both;"></div>
+    
+    {% if pnl_summary %}
+    <div style="background: var(--header-bg); padding: 20px; margin: 20px 0; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+        <h2 style="color: #fff; margin: 0 0 15px 0; font-size: 18px; font-weight: bold;">
+            📊 P&L Summary (Filtered Results)
+        </h2>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+            <!-- Total P&L -->
+            <div style="background: rgba(255,255,255,0.95); padding: 15px; border-radius: 6px; text-align: center;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 5px;">Total P&L</div>
+                <div class="pnl-summary-value {% if pnl_summary.total_pnl >= 0 %}pnl-summary-value-positive{% else %}pnl-summary-value-negative{% endif %}">
+                    ₹{{ pnl_summary.total_pnl|floatformat:2 }}
+                </div>
+            </div>
+            
+            <!-- Total Trades -->
+            <div style="background: rgba(255,255,255,0.95); padding: 15px; border-radius: 6px; text-align: center;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 5px;">Total Trades</div>
+                <div style="font-size: 24px; font-weight: bold; color: #333;">
+                    {{ pnl_summary.total_trades }}
+                </div>
+            </div>
+            
+            <!-- Winning Trades -->
+            <div style="background: rgba(255,255,255,0.95); padding: 15px; border-radius: 6px; text-align: center;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 5px;">Winning Trades</div>
+                <div style="font-size: 24px; font-weight: bold; color: #28a745;">
+                    {{ pnl_summary.winning_trades }}
+                </div>
+            </div>
+            
+            <!-- Losing Trades -->
+            <div style="background: rgba(255,255,255,0.95); padding: 15px; border-radius: 6px; text-align: center;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 5px;">Losing Trades</div>
+                <div style="font-size: 24px; font-weight: bold; color: #dc3545;">
+                    {{ pnl_summary.losing_trades }}
+                </div>
+            </div>
+            
+            <!-- Win Rate -->
+            <div style="background: rgba(255,255,255,0.95); padding: 15px; border-radius: 6px; text-align: center;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 5px;">Win Rate</div>
+                <div style="font-size: 24px; font-weight: bold; color: #333;">
+                    {{ pnl_summary.win_rate|floatformat:1 }}%
+                </div>
+            </div>
+            
+            <!-- Gross Profit -->
+            <div style="background: rgba(255,255,255,0.95); padding: 15px; border-radius: 6px; text-align: center;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 5px;">Gross Profit</div>
+                <div style="font-size: 24px; font-weight: bold; color: #28a745;">
+                    ₹{{ pnl_summary.gross_profit|floatformat:2 }}
+                </div>
+            </div>
+            
+            <!-- Gross Loss -->
+            <div style="background: rgba(255,255,255,0.95); padding: 15px; border-radius: 6px; text-align: center;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 5px;">Gross Loss</div>
+                <div style="font-size: 24px; font-weight: bold; color: #dc3545;">
+                    ₹{{ pnl_summary.gross_loss|floatformat:2 }}
+                </div>
+            </div>
+            
+            <!-- Open Trades -->
+            <div style="background: rgba(255,255,255,0.95); padding: 15px; border-radius: 6px; text-align: center;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 5px;">Open Trades</div>
+                <div style="font-size: 24px; font-weight: bold; color: #17a2b8;">
+                    {{ pnl_summary.open_trades }}
+                </div>
+            </div>
+        </div>
+        
+        {% if pnl_summary.total_trades > 0 %}
+        <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.3);">
+            <div style="display: flex; justify-content: space-between; align-items: center; color: #fff; flex-wrap: wrap; gap: 15px;">
+                <div>
+                    <strong>Profit Factor:</strong> 
+                    {% if pnl_summary.profit_factor >= 999999 %}
+                        ∞
+                    {% elif pnl_summary.profit_factor > 0 %}
+                        {{ pnl_summary.profit_factor|floatformat:2 }}
+                    {% else %}
+                        N/A
+                    {% endif %}
+                </div>
+                <div>
+                    <strong>Avg Win:</strong> 
+                    ₹{{ pnl_summary.avg_win|floatformat:2 }}
+                </div>
+                <div>
+                    <strong>Avg Loss:</strong> 
+                    ₹{{ pnl_summary.avg_loss|floatformat:2 }}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+    <div style="clear: both;"></div>
+{% endblock %}
+

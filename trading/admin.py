@@ -4,6 +4,8 @@ Django admin interface for trading app
 from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse
+from django.db import models
+from decimal import Decimal
 from trading.models import Strategy, Signal, Order, TradeLog, DailyStats
 from trading.models_ha import HeikinAshiCandle
 
@@ -113,6 +115,7 @@ class TradeLogAdmin(admin.ModelAdmin):
     readonly_fields = ['entry_time', 'exit_time', 'created_at', 'updated_at', 'pnl_percentage_display', 'duration_display']
     date_hierarchy = 'entry_time'
     list_per_page = 50
+    change_list_template = 'admin/trading/tradelog/change_list.html'
     
     fieldsets = (
         ('Trade Information', {
@@ -143,6 +146,85 @@ class TradeLogAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         """Optimize queryset"""
         return super().get_queryset(request).select_related('strategy', 'signal', 'entry_order', 'exit_order')
+    
+    def changelist_view(self, request, extra_context=None):
+        """Override to add P&L summary"""
+        response = super().changelist_view(request, extra_context=extra_context)
+        
+        try:
+            # Get the filtered queryset (respects date filters, search, etc.)
+            qs = response.context_data['cl'].queryset
+            
+            # Calculate summary for closed trades only
+            closed_trades = qs.filter(is_open=False, pnl_value__isnull=False)
+            
+            total_trades = closed_trades.count()
+            winning_trades = closed_trades.filter(pnl_value__gt=0).count()
+            losing_trades = closed_trades.filter(pnl_value__lt=0).count()
+            
+            # Calculate totals
+            from decimal import Decimal
+            total_pnl = closed_trades.aggregate(
+                total=models.Sum('pnl_value')
+            )['total'] or Decimal('0.00')
+            
+            gross_profit = closed_trades.filter(pnl_value__gt=0).aggregate(
+                total=models.Sum('pnl_value')
+            )['total'] or Decimal('0.00')
+            
+            gross_loss = closed_trades.filter(pnl_value__lt=0).aggregate(
+                total=models.Sum('pnl_value')
+            )['total'] or Decimal('0.00')
+            
+            # Calculate win rate
+            win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+            
+            # Calculate profit factor
+            if gross_loss != 0:
+                profit_factor = float(abs(gross_profit / gross_loss))
+            elif gross_profit > 0:
+                profit_factor = float('inf')
+            else:
+                profit_factor = 0.0
+            
+            # Calculate averages
+            avg_win = gross_profit / winning_trades if winning_trades > 0 else Decimal('0.00')
+            avg_loss = abs(gross_loss / losing_trades) if losing_trades > 0 else Decimal('0.00')
+            
+            # Open trades count
+            open_trades = qs.filter(is_open=True).count()
+            
+            # Add summary to context
+            response.context_data['pnl_summary'] = {
+                'total_trades': total_trades,
+                'winning_trades': winning_trades,
+                'losing_trades': losing_trades,
+                'total_pnl': total_pnl,
+                'gross_profit': gross_profit,
+                'gross_loss': gross_loss,
+                'win_rate': win_rate,
+                'profit_factor': profit_factor,
+                'avg_win': avg_win,
+                'avg_loss': avg_loss,
+                'open_trades': open_trades,
+            }
+        except (AttributeError, KeyError):
+            # If there's an error, set empty summary
+            response.context_data['pnl_summary'] = {
+                'total_trades': 0,
+                'winning_trades': 0,
+                'losing_trades': 0,
+                'total_pnl': Decimal('0.00'),
+                'gross_profit': Decimal('0.00'),
+                'gross_loss': Decimal('0.00'),
+                'win_rate': 0,
+                'profit_factor': 0,
+                'avg_win': Decimal('0.00'),
+                'avg_loss': Decimal('0.00'),
+                'open_trades': 0,
+            }
+        
+        return response
     
     def dry_run_badge(self, obj):
         """Display dry-run badge"""
