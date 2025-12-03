@@ -87,6 +87,48 @@ class Strategy(models.Model):
         help_text="Yesterday's futures closing price (used for ATM strike selection)"
     )
     
+    # Heikin Ashi Strategy Parameters
+    base_daily_target_per_lot = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('1000'),
+        help_text="Base daily profit target per lot (default: ₹1000 for 35 quantity)"
+    )
+    daily_stop_loss_factor = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('0.5'),
+        help_text="Daily stop-loss as factor of daily target (default: 0.5 = 50%)"
+    )
+    per_trade_profit_target = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('500'),
+        help_text="Per-trade profit target in rupees (default: ₹500)"
+    )
+    target_points = models.IntegerField(
+        default=60,
+        help_text="Futures profit target in points (default: 60 points)"
+    )
+    option_target_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('0.15'),
+        help_text="Option profit target as percentage (default: 0.15 = 15%)"
+    )
+    stoploss_option_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('0.30'),
+        help_text="Option stop-loss as percentage (default: 0.30 = 30%)"
+    )
+    stoploss_futures_points = models.IntegerField(
+        default=30,
+        help_text="Futures stop-loss in points (default: 30 points)"
+    )
+    square_off_time_ha = models.TimeField(
+        default="15:20:00",
+        help_text="Square-off time for Heikin Ashi strategy (default: 15:20 = 3:20 PM)"
+    )
+    trade_start_time_ha = models.TimeField(
+        default="09:15:00",
+        help_text="Trading start time for Heikin Ashi strategy (default: 09:15 = 9:15 AM)"
+    )
+    trade_end_time_ha = models.TimeField(
+        default="15:30:00",
+        help_text="Trading end time for Heikin Ashi strategy (default: 15:30 = 3:30 PM)"
+    )
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     

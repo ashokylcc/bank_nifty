@@ -7,7 +7,7 @@ import time
 import logging
 import threading
 from decimal import Decimal
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 from typing import Optional, Dict
 from django.core.management.base import BaseCommand
 from django.utils import timezone
@@ -29,19 +29,35 @@ logger = logging.getLogger(__name__)
 
 # Constants
 LOT_SIZE = 35
+BASE_DAILY_TARGET_PER_LOT = Decimal('1000')  # ₹1000 profit target per 35 quantity
+DAILY_STOP_LOSS_FACTOR = Decimal('0.5')  # 50% of the daily profit target
+PER_TRADE_PROFIT_TARGET = Decimal('500')  # ₹500 profit target per trade
 TARGET_POINTS = 60  # Futures target: +60 points
 OPTION_TARGET_PCT = Decimal('0.15')  # 15% option premium gain
+PROFIT_TARGET_RUPEES = Decimal('1300')  # ₹1300 profit target (absolute P&L) - DEPRECATED
 STOPLOSS_OPTION_PCT = Decimal('0.30')  # -30% option premium
 STOPLOSS_FUTURES_POINTS = 30  # 30 points adverse movement
 SQUARE_OFF_TIME = dt_time(15, 20)  # 3:20 PM
 TRADE_START_TIME = dt_time(9, 15)  # 9:15 AM (exchange open)
 TRADE_END_TIME = dt_time(15, 30)  # 3:30 PM (for testing - allows full trading day)
 
+# Forming candle entry parameters
+FORMING_CANDLE_BUFFER_SECONDS = 5  # Wait a few seconds after new candle starts
+FORMING_CANDLE_MIN_TICKS = 3  # Require minimum ticks before trusting HA color
+
 
 class HeikinAshiStrategy:
     """Heikin Ashi strategy implementation"""
     
-    def __init__(self, dry_run: bool = True, strategy_name: str = "Heikin Ashi Strategy", debug: bool = False, candle_source: str = "futures", stdout_callback=None):
+    def __init__(
+        self,
+        dry_run: bool = True,
+        strategy_name: str = "Heikin Ashi Strategy",
+        debug: bool = False,
+        candle_source: str = "futures",
+        stdout_callback=None,
+        quantity: int = LOT_SIZE,
+    ):
         self.dry_run = dry_run
         self.strategy_name = strategy_name
         self.strategy_obj = None
@@ -60,8 +76,102 @@ class HeikinAshiStrategy:
         # State tracking
         self.current_position: Optional[Dict] = None
         self.previous_ha: Optional[Dict] = None  # Only track HA for reversal detection
-        self.last_candle_time: Optional[datetime] = None
+        self.last_entry_candle_start: Optional[datetime] = None
+        self.last_hold_check_candle_start: Optional[datetime] = None
+        self.entry_candle_ha_color: Optional[str] = None  # Track HA color at entry for intra-candle reversal
         self.candle_count = 0  # Track candle number for debug
+        self.quantity = quantity if quantity and quantity > 0 else LOT_SIZE
+        if self.quantity % LOT_SIZE != 0:
+            logger.warning(
+                f"Quantity {self.quantity} is not a multiple of base lot size {LOT_SIZE}. Proceeding anyway."
+            )
+        
+        # Daily performance controls
+        self.daily_pnl = Decimal('0')
+        
+        # Initialize with default constants (will be loaded from DB later if strategy_obj is set)
+        self.per_trade_profit_target = PER_TRADE_PROFIT_TARGET
+        self.target_points = TARGET_POINTS
+        self.option_target_pct = OPTION_TARGET_PCT
+        self.stoploss_option_pct = STOPLOSS_OPTION_PCT
+        self.stoploss_futures_points = STOPLOSS_FUTURES_POINTS
+        self.square_off_time = SQUARE_OFF_TIME
+        self.trade_start_time = TRADE_START_TIME
+        self.trade_end_time = TRADE_END_TIME
+        
+        # Calculate daily targets (will be updated from DB if available)
+        quantity_factor = Decimal(str(self.quantity)) / Decimal(str(LOT_SIZE))
+        self.daily_profit_target = quantity_factor * BASE_DAILY_TARGET_PER_LOT
+        self.daily_stop_loss = self.daily_profit_target * DAILY_STOP_LOSS_FACTOR
+        self.trading_halted_for_day = False
+        logger.info(
+            f"🎯 Daily controls: Qty={self.quantity} → Target ₹{self.daily_profit_target:.2f}, "
+            f"Stop-loss -₹{self.daily_stop_loss:.2f}"
+        )
+    
+    def _load_parameters_from_db(self):
+        """Load all parameters from database if strategy_obj is available"""
+        if not self.strategy_obj:
+            return
+        
+        try:
+            self.strategy_obj.refresh_from_db()
+            
+            # Load daily target parameters
+            if hasattr(self.strategy_obj, 'base_daily_target_per_lot') and self.strategy_obj.base_daily_target_per_lot:
+                base_daily_target = Decimal(str(self.strategy_obj.base_daily_target_per_lot))
+            else:
+                base_daily_target = BASE_DAILY_TARGET_PER_LOT
+            
+            if hasattr(self.strategy_obj, 'daily_stop_loss_factor') and self.strategy_obj.daily_stop_loss_factor:
+                daily_stop_factor = Decimal(str(self.strategy_obj.daily_stop_loss_factor))
+            else:
+                daily_stop_factor = DAILY_STOP_LOSS_FACTOR
+            
+            # Recalculate daily targets
+            quantity_factor = Decimal(str(self.quantity)) / Decimal(str(LOT_SIZE))
+            self.daily_profit_target = quantity_factor * base_daily_target
+            self.daily_stop_loss = self.daily_profit_target * daily_stop_factor
+            
+            # Load per-trade parameters
+            # Interpret DB per_trade_profit_target as **per-lot** base target (for 1× LOT_SIZE).
+            # Scale it by quantity_factor so that target becomes “₹X per lot”:
+            #   e.g. 1 lot (35 qty)  -> X
+            #        2 lots (70 qty) -> 2X, etc.
+            if hasattr(self.strategy_obj, 'per_trade_profit_target') and self.strategy_obj.per_trade_profit_target:
+                base_per_trade_target = Decimal(str(self.strategy_obj.per_trade_profit_target))
+            else:
+                base_per_trade_target = PER_TRADE_PROFIT_TARGET
+            self.per_trade_profit_target = quantity_factor * base_per_trade_target
+            
+            if hasattr(self.strategy_obj, 'target_points') and self.strategy_obj.target_points:
+                self.target_points = int(self.strategy_obj.target_points)
+            
+            if hasattr(self.strategy_obj, 'option_target_pct') and self.strategy_obj.option_target_pct:
+                self.option_target_pct = Decimal(str(self.strategy_obj.option_target_pct))
+            
+            if hasattr(self.strategy_obj, 'stoploss_option_pct') and self.strategy_obj.stoploss_option_pct:
+                self.stoploss_option_pct = Decimal(str(self.strategy_obj.stoploss_option_pct))
+            
+            if hasattr(self.strategy_obj, 'stoploss_futures_points') and self.strategy_obj.stoploss_futures_points:
+                self.stoploss_futures_points = int(self.strategy_obj.stoploss_futures_points)
+            
+            # Load time parameters
+            if hasattr(self.strategy_obj, 'square_off_time_ha') and self.strategy_obj.square_off_time_ha:
+                self.square_off_time = self.strategy_obj.square_off_time_ha
+            
+            if hasattr(self.strategy_obj, 'trade_start_time_ha') and self.strategy_obj.trade_start_time_ha:
+                self.trade_start_time = self.strategy_obj.trade_start_time_ha
+            
+            if hasattr(self.strategy_obj, 'trade_end_time_ha') and self.strategy_obj.trade_end_time_ha:
+                self.trade_end_time = self.strategy_obj.trade_end_time_ha
+            
+            logger.info(
+                f"📊 Parameters loaded from DB: Per-trade target ₹{self.per_trade_profit_target:.2f}, "
+                f"Daily target ₹{self.daily_profit_target:.2f}, Stop-loss -₹{self.daily_stop_loss:.2f}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not load parameters from DB, using defaults: {e}")
         
         # WebSocket data
         self.futures_ltp: Optional[Decimal] = None
@@ -322,55 +432,294 @@ class HeikinAshiStrategy:
         
         return None
     
+    def _forming_candle_ready(self, forming_candle: Dict) -> bool:
+        """Check if forming candle has enough data to evaluate"""
+        if not forming_candle:
+            return False
+        
+        start_time = forming_candle.get('start_time')
+        if not start_time:
+            return False
+        
+        now = get_ist_now()
+        elapsed = (now - start_time).total_seconds()
+        volume = forming_candle.get('volume', 0)
+        
+        if elapsed < FORMING_CANDLE_BUFFER_SECONDS:
+            return False
+        
+        if volume < FORMING_CANDLE_MIN_TICKS:
+            return False
+        
+        return True
+    
+    def _calculate_forming_ha(self, forming_candle: Dict) -> Optional[Dict]:
+        """Calculate HA values for the current forming candle"""
+        if not forming_candle:
+            return None
+        
+        previous_ha = self.heikin_ashi_calc.get_last_candle()
+        
+        # Ensure previous HA is from the same trading day
+        if previous_ha:
+            from trading.utils.time_helpers import IST
+            prev_time = previous_ha.get('end_time') or previous_ha.get('timestamp')
+            form_time = forming_candle.get('start_time') or forming_candle.get('timestamp')
+            
+            if prev_time and form_time:
+                try:
+                    # Ensure both are timezone-aware datetimes
+                    if not isinstance(prev_time, datetime):
+                        if isinstance(prev_time, str):
+                            from dateutil import parser
+                            prev_time = parser.parse(prev_time)
+                        if prev_time.tzinfo is None:
+                            prev_time = IST.localize(prev_time)
+                    
+                    if not isinstance(form_time, datetime):
+                        if isinstance(form_time, str):
+                            from dateutil import parser
+                            form_time = parser.parse(form_time)
+                        if form_time.tzinfo is None:
+                            form_time = IST.localize(form_time)
+                    
+                    # Check if same trading day
+                    if isinstance(prev_time, datetime) and isinstance(form_time, datetime):
+                        prev_date = prev_time.date()
+                        form_date = form_time.date()
+                        if prev_date != form_date:
+                            # Different trading day - TradingView continues HA across days
+                            # So we should use previous day's last HA for continuity (TradingView style)
+                            # Only reset if there's a gap > 2 hours (overnight/weekend)
+                            time_diff = form_time - prev_time
+                            if time_diff > timedelta(hours=18):  # More than overnight gap (weekend/holiday)
+                                logger.debug(f"Large gap detected ({time_diff}), resetting HA for forming candle")
+                                previous_ha = None
+                            else:
+                                # Overnight gap - continue HA (TradingView style)
+                                logger.debug(f"Overnight gap ({prev_date} → {form_date}), continuing HA from previous day")
+                                # Keep previous_ha to maintain continuity
+                except Exception as e:
+                    # If we can't verify, reset to be safe
+                    logger.debug(f"Could not verify same-day HA, resetting: {e}")
+                    previous_ha = None
+        
+        from trading.services.heikin_ashi import calculate_heikin_ashi
+        return calculate_heikin_ashi(forming_candle, previous_ha)
+    
     def check_entry_conditions(self) -> Optional[str]:
         """
-        Check entry conditions after 15-min candle close
-        Uses ONLY Heikin-Ashi for trend detection
-        
-        Returns:
-            'BUY' for CALL entry (uptrend), 'SELL' for PUT entry (downtrend), None if no entry
+        Check entry conditions: Monitor price movement DURING candle formation.
+        Enter when current LTP moves above previous high or below previous low.
+        This provides more trading opportunities than waiting for gap at candle open.
         """
-        # Get last completed candle
-        last_candle = self.candle_aggregator.get_last_candle()
-        if not last_candle:
+        if self.trading_halted_for_day:
             return None
         
-        # Only check after candle close (not during candle formation)
-        current_time = get_ist_now()
-        candle_end_time = last_candle['end_time']
-        
-        # If this candle was already processed, skip
-        if self.last_candle_time and self.last_candle_time >= candle_end_time:
+        if self.current_position:
             return None
         
-        # Check trading window: Only allow entries between 9:15 AM - 11:00 AM
-        current_time_obj = current_time.time()
-        if current_time_obj < TRADE_START_TIME or current_time_obj > TRADE_END_TIME:
-            logger.info(f"⏸️  Entry blocked: Outside trading window {current_time_obj.strftime('%H:%M:%S')} (Window: {TRADE_START_TIME.strftime('%H:%M')} - {TRADE_END_TIME.strftime('%H:%M')})")
+        # Need futures LTP to check breakout
+        if not self.futures_ltp:
             return None
         
-        # Mark this candle as processed
-        self.last_candle_time = candle_end_time
-        
-        # Get Heikin-Ashi indicator (ONLY indicator used for entry)
-        last_ha = self.heikin_ashi_calc.get_last_candle()
-        if not last_ha:
+        forming_candle = self.candle_aggregator.get_current_forming_candle()
+        if not forming_candle:
             return None
         
-        # Get HA color (TradingView style: GREEN when HA_C > HA_O, RED when HA_C < HA_O)
-        ha_color = last_ha.get('ha_color', 'RED' if last_ha['ha_close'] < last_ha['ha_open'] else 'GREEN')
+        start_time = forming_candle.get('start_time')
+        if not start_time:
+            return None
         
-        # Entry logic based ONLY on Heikin-Ashi:
-        # - GREEN (uptrend) → BUY CALL
-        # - RED (downtrend) → BUY PUT
-        if ha_color == 'GREEN':
-            logger.info(f"📈 UPTREND detected (HA: GREEN) → Signal: BUY CALL")
-            return 'BUY'  # Uptrend: Buy CALL
-        elif ha_color == 'RED':
-            logger.info(f"📉 DOWNTREND detected (HA: RED) → Signal: BUY PUT")
-            return 'SELL'  # Downtrend: Buy PUT
+        # If strategy just started mid-candle, wait for the NEXT 15m candle
+        if self.last_entry_candle_start is None:
+            self.last_entry_candle_start = start_time
+            logger.info(
+                f"⏳ Waiting for next candle: current bucket starting "
+                f"{start_time.strftime('%H:%M')} already in progress"
+            )
+            return None
+        
+        # Ensure we only process each candle once (track which candle we're monitoring)
+        if self.last_entry_candle_start and start_time <= self.last_entry_candle_start:
+            return None
+        
+        current_time_obj = get_ist_now().time()
+        if current_time_obj < self.trade_start_time or current_time_obj > self.trade_end_time:
+            logger.info(
+                f"⏸️  Entry blocked: Outside trading window "
+                f"{current_time_obj.strftime('%H:%M:%S')} "
+                f"(Window: {self.trade_start_time.strftime('%H:%M')} - {self.trade_end_time.strftime('%H:%M')})"
+            )
+            return None
+        
+        # Wait for forming candle to have minimum data (avoid false signals)
+        if not self._forming_candle_ready(forming_candle):
+            return None
+        
+        previous_candle = self.candle_aggregator.get_last_candle()
+        if not previous_candle:
+            return None
+        
+        prev_high = previous_candle.get('high')
+        prev_low = previous_candle.get('low')
+        if prev_high is None or prev_low is None:
+            return None
+        
+        # OPTION 2: Check if current LTP moves above/below previous high/low DURING candle formation
+        current_ltp = self.futures_ltp
+        
+        # Log previous candle details for debugging
+        prev_candle_time = previous_candle.get('start_time') or previous_candle.get('timestamp')
+        prev_time_str = prev_candle_time.strftime('%H:%M') if prev_candle_time else 'N/A'
+        logger.info(
+            f"🔍 Entry Check: Current LTP {current_ltp:.2f} | "
+            f"Prev Candle [{prev_time_str}]: High {prev_high:.2f}, Low {prev_low:.2f}"
+        )
+        
+        signal = None
+        if current_ltp > prev_high:
+            signal = 'BUY'
+            self.entry_candle_ha_color = 'GREEN'
+            logger.info(
+                f"📈 Breakout DURING candle: LTP {current_ltp:.2f} > Prev High {prev_high:.2f} → BUY CALL"
+            )
+        elif current_ltp < prev_low:
+            signal = 'SELL'
+            self.entry_candle_ha_color = 'RED'
+            logger.info(
+                f"📉 Breakdown DURING candle: LTP {current_ltp:.2f} < Prev Low {prev_low:.2f} → BUY PUT"
+            )
+        else:
+            logger.debug(
+                f"⏸️  No breakout: LTP {current_ltp:.2f} is between Prev High {prev_high:.2f} and Low {prev_low:.2f}"
+            )
+        
+        if signal:
+            self.last_entry_candle_start = start_time
+            return signal
         
         return None
+    
+    def check_reversal_on_new_candle(self):
+        """
+        When holding a position, evaluate the next candle's early HA color.
+        If it flips against the current position, exit immediately.
+        This checks when a NEW candle starts (not intra-candle).
+        """
+        if not self.current_position:
+            self.last_hold_check_candle_start = None
+            return
+        
+        forming_candle = self.candle_aggregator.get_current_forming_candle()
+        if not forming_candle:
+            return
+        
+        start_time = forming_candle.get('start_time')
+        if not start_time:
+            return
+        
+        # Only check when a NEW candle starts (not the same candle we entered on)
+        if self.last_hold_check_candle_start and start_time <= self.last_hold_check_candle_start:
+            return
+        
+        if not self._forming_candle_ready(forming_candle):
+            return
+        
+        forming_ha = self._calculate_forming_ha(forming_candle)
+        if not forming_ha:
+            return
+        
+        ha_color = forming_ha.get('ha_color', 'GREEN' if forming_ha['ha_close'] > forming_ha['ha_open'] else 'RED')
+        side = self.current_position['side']
+        
+        exit_required = False
+        if side == 'BUY_CE' and ha_color == 'RED':
+            logger.info("🔁 New candle turned RED → Exit CALL position")
+            exit_required = True
+        elif side == 'BUY_PE' and ha_color == 'GREEN':
+            logger.info("🔁 New candle turned GREEN → Exit PUT position")
+            exit_required = True
+        
+        self.last_hold_check_candle_start = start_time
+        
+        if exit_required:
+            self.exit_trade('TREND_REVERSAL')
+    
+    def check_intra_candle_reversal(self):
+        """
+        Continuously monitor the forming candle's HA color while in a position.
+        If the forming candle's HA color flips against the current position within the same candle,
+        exit immediately. This handles intra-candle reversals.
+        """
+        if not self.current_position:
+            return
+        
+        # Need entry candle HA color to detect reversal
+        if not self.entry_candle_ha_color:
+            return
+        
+        forming_candle = self.candle_aggregator.get_current_forming_candle()
+        if not forming_candle:
+            return
+        
+        # Only check if we have enough data (same buffer as entry)
+        if not self._forming_candle_ready(forming_candle):
+            return
+        
+        forming_ha = self._calculate_forming_ha(forming_candle)
+        if not forming_ha:
+            return
+        
+        current_ha_color = forming_ha.get('ha_color', 'GREEN' if forming_ha['ha_close'] > forming_ha['ha_open'] else 'RED')
+        side = self.current_position['side']
+        
+        # Check if HA color flipped against the entry signal
+        exit_required = False
+        if side == 'BUY_CE':
+            # Entered on GREEN, but now forming candle is RED
+            if self.entry_candle_ha_color == 'GREEN' and current_ha_color == 'RED':
+                logger.info("🔄 Intra-candle reversal: Forming candle flipped RED → Exit CALL position")
+                exit_required = True
+        elif side == 'BUY_PE':
+            # Entered on RED, but now forming candle is GREEN
+            if self.entry_candle_ha_color == 'RED' and current_ha_color == 'GREEN':
+                logger.info("🔄 Intra-candle reversal: Forming candle flipped GREEN → Exit PUT position")
+                exit_required = True
+        
+        if exit_required:
+            self.exit_trade('TREND_REVERSAL')
+    
+    def monitor_daily_limits(self):
+        """
+        Continuously enforce daily profit target and stop-loss.
+        When either threshold is reached, stop trading for the day and
+        flatten any open position immediately.
+        """
+        if self.trading_halted_for_day:
+            if self.current_position:
+                logger.info("⚠️ Trading halted for day but position still open → exiting now")
+                self.exit_trade('DAILY_HALT')
+            return
+        
+        if self.daily_pnl >= self.daily_profit_target:
+            self.trading_halted_for_day = True
+            logger.info("🎯 Daily target hit. Trading halted.")
+            if self.stdout_callback:
+                self.stdout_callback("🎯 Daily target hit. Trading halted.")
+            if self.current_position:
+                logger.info("🎯 Exiting open position due to daily profit target")
+                self.exit_trade('DAILY_TARGET')
+            return
+        
+        if self.daily_pnl <= -self.daily_stop_loss:
+            self.trading_halted_for_day = True
+            logger.info("🛑 Daily stop-loss hit. Trading halted.")
+            if self.stdout_callback:
+                self.stdout_callback("🛑 Daily stop-loss hit. Trading halted.")
+            if self.current_position:
+                logger.info("🛑 Exiting open position due to daily stop-loss")
+                self.exit_trade('DAILY_STOP')
     
     def enter_trade(self, signal: str, futures_ltp: Decimal) -> bool:
         """
@@ -383,6 +732,10 @@ class HeikinAshiStrategy:
         Returns:
             bool: True if entry successful
         """
+        if self.trading_halted_for_day:
+            logger.info("🚫 Trading halted for the day. Entry skipped.")
+            return False
+        
         if self.current_position:
             logger.warning("Already in a position, skipping entry")
             return False
@@ -462,7 +815,7 @@ class HeikinAshiStrategy:
                     order = self.alice_client.place_order(
                         instrument=option_instrument,
                         transaction_type=self.alice_client.TRANSACTION_TYPE_BUY,
-                        quantity=LOT_SIZE,
+                        quantity=self.quantity,
                         order_type=self.alice_client.ORDER_TYPE_MARKET,
                         product_type=self.alice_client.PRODUCT_TYPE_INTRADAY
                     )
@@ -480,7 +833,7 @@ class HeikinAshiStrategy:
                 'strike': strike,
                 'side': side,
                 'expiry_date': expiry_date,
-                'lot_size': LOT_SIZE
+                'lot_size': self.quantity
             }
             
             # Update previous HA for reversal detection
@@ -566,62 +919,37 @@ class HeikinAshiStrategy:
         if not current_option_ltp:
             return None
         
-        # 1. TAKE PROFIT - FUTURES +60 POINTS
-        if 'CE' in side:  # CALL
-            futures_profit = current_futures_ltp - entry_future_price
-            if futures_profit >= Decimal(str(TARGET_POINTS)):
-                logger.info(f"✅ TARGET REACHED: Futures profit = {futures_profit:.2f} points (Target: {TARGET_POINTS})")
-                return 'FUTURES_TARGET'
-        else:  # PUT
-            futures_profit = entry_future_price - current_futures_ltp
-            if futures_profit >= Decimal(str(TARGET_POINTS)):
-                logger.info(f"✅ TARGET REACHED: Futures profit = {futures_profit:.2f} points (Target: {TARGET_POINTS})")
-                return 'FUTURES_TARGET'
+        # Calculate current trade P&L
+        pnl_amount = calculate_pnl(
+            entry_premium,
+            current_option_ltp,
+            side,
+            self.quantity
+        )
         
-        # 2. OPTION PROFIT TARGET (+15%)
-        option_pct = (current_option_ltp - entry_premium) / entry_premium
-        if option_pct >= OPTION_TARGET_PCT:
-            return 'OPTION_TARGET'
+        # 1. PER-TRADE PROFIT TARGET: Exit when current trade reaches target
+        if pnl_amount >= self.per_trade_profit_target:
+            logger.info(
+                f"🎯 Per-trade profit target reached: P&L ₹{pnl_amount:.2f} >= ₹{self.per_trade_profit_target:.2f}"
+            )
+            return 'PROFIT_TARGET'
         
-        # 3. REVERSAL EXIT - Check Heikin-Ashi color reversal (ONLY HA-based)
-        current_ha = self.heikin_ashi_calc.get_last_candle()
+        # EXIT CONDITIONS DISABLED: Only exit on next candle trend reversal (handled elsewhere)
+        # The following exit logics are intentionally disabled but kept for reference:
+        # - Futures profit target
+        # - Absolute profit target (old ₹1300)
+        # - Option percentage target
+        # - Completed-candle HA reversal
+        # - Option/Futures stop-loss
+        #
+        # Reason: User requested exits on per-trade ₹500 target OR next candle trend reversal.
+        # Safety exits (daily target/stop-loss, time exit) are handled outside this method.
         
-        if current_ha:
-            # Get current HA color
-            current_ha_color = current_ha.get('ha_color', 'RED' if current_ha['ha_close'] < current_ha['ha_open'] else 'GREEN')
-            
-            # For CALL (uptrend entry): Exit if HA turns RED (downtrend reversal)
-            if 'CE' in side:
-                if current_ha_color == 'RED':
-                    return 'TREND_REVERSAL'
-            
-            # For PUT (downtrend entry): Exit if HA turns GREEN (uptrend reversal)
-            elif 'PE' in side:
-                if current_ha_color == 'GREEN':
-                    logger.info(f"🔄 TREND REVERSAL: HA turned GREEN (uptrend) → Exit PUT position")
-                    return 'TREND_REVERSAL'
-        
-        # 4. STOPLOSS
-        # Option premium -30%
-        option_loss_pct = (entry_premium - current_option_ltp) / entry_premium
-        if option_loss_pct >= STOPLOSS_OPTION_PCT:
-            return 'STOPLOSS'
-        
-        # Futures adverse movement 30 points
-        if 'CE' in side:  # CALL
-            futures_loss = entry_future_price - current_futures_ltp
-            if futures_loss >= Decimal(str(STOPLOSS_FUTURES_POINTS)):
-                return 'STOPLOSS'
-        else:  # PUT
-            futures_loss = current_futures_ltp - entry_future_price
-            if futures_loss >= Decimal(str(STOPLOSS_FUTURES_POINTS)):
-                return 'STOPLOSS'
-        
-        # 5. TIME EXIT (3:20 PM) - Note: This is also checked continuously in main loop
+        # 2. TIME EXIT (3:20 PM) - Note: This is also checked continuously in main loop
         # Keeping this check here for safety, but main loop check takes priority
         current_time = get_ist_now()
-        if current_time.time() >= SQUARE_OFF_TIME:
-            logger.info(f"⏰ TIME EXIT triggered in check_exit_conditions: {current_time.time()} >= {SQUARE_OFF_TIME}")
+        if current_time.time() >= self.square_off_time:
+            logger.info(f"⏰ TIME EXIT triggered in check_exit_conditions: {current_time.time()} >= {self.square_off_time}")
             return 'TIME'
         
         return None
@@ -649,7 +977,7 @@ class HeikinAshiStrategy:
             entry['entry_premium'],
             exit_premium,
             entry['side'],
-            LOT_SIZE
+            self.quantity
         )
         pnl_percent = ((exit_premium - entry['entry_premium']) / entry['entry_premium'] * 100) if entry['entry_premium'] > 0 else Decimal('0')
         
@@ -660,7 +988,9 @@ class HeikinAshiStrategy:
         
         # Calculate specific trigger values for detailed explanation
         exit_details = ""
-        if exit_reason == 'FUTURES_TARGET':
+        if exit_reason == 'PROFIT_TARGET':
+            exit_details = f"P&L reached ₹{pnl_amount:.2f} (Per-trade target: ₹{PER_TRADE_PROFIT_TARGET:.2f})"
+        elif exit_reason == 'FUTURES_TARGET':
             if 'CE' in entry['side']:
                 futures_profit = exit_future_price - entry['entry_future_price']
             else:
@@ -688,7 +1018,7 @@ class HeikinAshiStrategy:
             else:
                 exit_details = f"Futures moved {futures_loss:.2f} points against (Stop-loss: -{STOPLOSS_FUTURES_POINTS} points)"
         elif exit_reason == 'TIME':
-            exit_details = f"Square-off time reached ({SQUARE_OFF_TIME.strftime('%H:%M')} IST)"
+            exit_details = f"Square-off time reached ({self.square_off_time.strftime('%H:%M')} IST)"
         else:
             exit_details = f"Exit reason: {exit_reason}"
         
@@ -699,7 +1029,7 @@ class HeikinAshiStrategy:
                 order = self.alice_client.place_order(
                     instrument=option_instrument,
                     transaction_type=self.alice_client.TRANSACTION_TYPE_SELL,
-                    quantity=LOT_SIZE,
+                    quantity=self.quantity,
                     order_type=self.alice_client.ORDER_TYPE_MARKET,
                     product_type=self.alice_client.PRODUCT_TYPE_INTRADAY
                 )
@@ -722,7 +1052,7 @@ class HeikinAshiStrategy:
             exit_reason=exit_reason,
             pnl_amount=pnl_amount,
             pnl_percent=pnl_percent,
-            lot_size=LOT_SIZE
+            lot_size=self.quantity
         )
         
         # Update trade in database (find existing open trade and update it)
@@ -774,11 +1104,15 @@ class HeikinAshiStrategy:
         
         # Map exit reasons to clear explanations
         exit_reason_explanations = {
+            'PROFIT_TARGET': f'Per-trade profit target reached (₹{PER_TRADE_PROFIT_TARGET:.2f})',
             'FUTURES_TARGET': f'Futures profit target reached (+{TARGET_POINTS} points)',
             'OPTION_TARGET': f'Option profit target reached (+{OPTION_TARGET_PCT*100:.0f}%)',
             'TREND_REVERSAL': 'Heikin-Ashi trend reversal detected',
             'STOPLOSS': f'Stop-loss triggered',
-            'TIME': f'Time-based exit (Square-off at {SQUARE_OFF_TIME.strftime("%H:%M")} IST)'
+            'TIME': f'Time-based exit (Square-off at {self.square_off_time.strftime("%H:%M")} IST)',
+            'DAILY_TARGET': 'Daily profit target hit',
+            'DAILY_STOP': 'Daily stop-loss hit',
+            'DAILY_HALT': 'Trading halted for the day'
         }
         
         # Get detailed exit information
@@ -823,10 +1157,37 @@ class HeikinAshiStrategy:
             )
             self.stdout_callback(exit_display)
         
+        # Update daily P&L and enforce halt thresholds
+        self.daily_pnl += pnl_amount
+        logger.info(
+            f"📊 Daily P&L updated: ₹{self.daily_pnl:.2f} / Target ₹{self.daily_profit_target:.2f} | "
+            f"Stop -₹{self.daily_stop_loss:.2f}"
+        )
+        if self.daily_pnl >= self.daily_profit_target and not self.trading_halted_for_day:
+            self.trading_halted_for_day = True
+            logger.info("🎯 Daily target hit. Trading halted.")
+            if self.stdout_callback:
+                self.stdout_callback("🎯 Daily target hit. Trading halted.")
+        elif self.daily_pnl <= -self.daily_stop_loss and not self.trading_halted_for_day:
+            self.trading_halted_for_day = True
+            logger.info("🛑 Daily stop-loss hit. Trading halted.")
+            if self.stdout_callback:
+                self.stdout_callback("🛑 Daily stop-loss hit. Trading halted.")
+        
         # Clear position
         self.current_position = None
+        self.entry_candle_ha_color = None  # Reset entry HA color tracking
         self.option_symbol = None
         self.option_ltp = None
+        
+        # After exit, wait for next candle before allowing new entry
+        # This ensures we don't immediately re-enter on the same candle
+        forming_candle = self.candle_aggregator.get_current_forming_candle()
+        if forming_candle:
+            start_time = forming_candle.get('start_time')
+            if start_time:
+                self.last_entry_candle_start = start_time
+                logger.info(f"⏸️  After exit, waiting for next candle (current: {start_time.strftime('%H:%M')})")
         
         return True
     
@@ -995,16 +1356,17 @@ class HeikinAshiStrategy:
                     end_time=new_candle.get('end_time')
                 )
             
-            # Check entry/exit after HA candle is created (only HA-based logic)
-            # Check entry (only after candle close)
+            # Check entry/exit using next-candle logic
             if not self.current_position:
                 signal = self.check_entry_conditions()
                 if signal and self.futures_ltp:
                     self.enter_trade(signal, self.futures_ltp)
+            else:
+                # Monitor the newly forming candle for reversal
+                self.check_reversal_on_new_candle()
             
-            # Check exit (time exit is checked continuously in main loop, so skip it here)
+            # Check additional exit conditions (targets, SL, etc.)
             if self.current_position:
-                # Check all exit conditions except time (time is checked in main loop)
                 exit_reason = self.check_exit_conditions()
                 if exit_reason:
                     self.exit_trade(exit_reason)
@@ -1045,6 +1407,12 @@ class Command(BaseCommand):
             default='futures',
             help='Candle data source: "futures" (default) or "spot"'
         )
+        parser.add_argument(
+            '--quantity',
+            type=int,
+            default=LOT_SIZE,
+            help='Total option quantity (multiple of 35). Used for order sizing and daily targets.'
+        )
     
     def handle(self, *args, **options):
         dry_run = options.get('dry_run', True)
@@ -1065,14 +1433,44 @@ class Command(BaseCommand):
         
         # Initialize strategy with stdout callback for terminal messages
         candle_source = options.get('candle_source', 'futures')
+        
+        # Calculate quantity: Use command-line arg if provided, otherwise calculate from DB (lot_size * num_lots)
+        quantity_arg = options.get('quantity')
+        if quantity_arg and quantity_arg != LOT_SIZE:
+            # Explicit quantity provided via command line - use it
+            quantity = quantity_arg
+            self.stdout.write(
+                self.style.SUCCESS(f"📊 Using quantity from command line: {quantity}")
+            )
+        else:
+            # No explicit quantity - calculate from DB
+            db_lot_size = strategy_obj.lot_size if strategy_obj.lot_size else LOT_SIZE
+            db_num_lots = strategy_obj.num_lots if strategy_obj.num_lots else 1
+            quantity = db_lot_size * db_num_lots
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"📊 Quantity from DB: lot_size={db_lot_size} × num_lots={db_num_lots} = {quantity}"
+                )
+            )
+        
         strategy = HeikinAshiStrategy(
             dry_run=dry_run, 
             strategy_name="Heikin Ashi Strategy", 
             debug=debug,
             candle_source=candle_source,
-            stdout_callback=lambda msg: self.stdout.write(self.style.SUCCESS(msg))
+            stdout_callback=lambda msg: self.stdout.write(self.style.SUCCESS(msg)),
+            quantity=quantity
         )
+        # Set strategy_obj BEFORE loading parameters (so _load_parameters_from_db can access it)
         strategy.strategy_obj = strategy_obj
+        # Reload parameters from DB now that strategy_obj is set (quantity already set, but daily targets need recalculation)
+        strategy._load_parameters_from_db()
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"🧮 Quantity: {strategy.quantity} | Daily target ₹{strategy.daily_profit_target:.2f} | "
+                f"Stop-loss -₹{strategy.daily_stop_loss:.2f}"
+            )
+        )
         
         if candle_source:
             self.stdout.write(self.style.SUCCESS(f"📊 Candle source: {candle_source.upper()}"))
@@ -1092,11 +1490,11 @@ class Command(BaseCommand):
         # Check if trading window is already closed
         current_time = get_ist_now()
         current_time_obj = current_time.time()
-        if current_time_obj > TRADE_END_TIME:
+        if current_time_obj > strategy.trade_end_time:
             self.stdout.write(
                 self.style.WARNING(
                     f"⏰ Trading window already closed: Current time {current_time_obj.strftime('%H:%M:%S')} > "
-                    f"End time {TRADE_END_TIME.strftime('%H:%M:%S')}"
+                    f"End time {strategy.trade_end_time.strftime('%H:%M:%S')}"
                 )
             )
             self.stdout.write(self.style.SUCCESS("✅ Strategy stopped (outside trading window)"))
@@ -1110,12 +1508,12 @@ class Command(BaseCommand):
                 current_time = get_ist_now()
                 current_time_obj = current_time.time()
                 
-                # Stop strategy after TRADE_END_TIME (3:30 PM)
-                if current_time_obj > TRADE_END_TIME:
+                # Stop strategy after trade_end_time
+                if current_time_obj > strategy.trade_end_time:
                     self.stdout.write(
                         self.style.WARNING(
                             f"\n⏰ Trading window closed: Current time {current_time_obj.strftime('%H:%M:%S')} > "
-                            f"End time {TRADE_END_TIME.strftime('%H:%M:%S')}"
+                            f"End time {strategy.trade_end_time.strftime('%H:%M:%S')}"
                         )
                     )
                     # Exit any open position before stopping
@@ -1125,80 +1523,213 @@ class Command(BaseCommand):
                 
                 # Check time exit continuously (not just on candle close) - Exit positions at 3:20 PM
                 if strategy.current_position:
-                    if current_time_obj >= SQUARE_OFF_TIME:
-                        logger.info(f"⏰ TIME EXIT: Current time {current_time_obj} >= Square-off time {SQUARE_OFF_TIME}")
+                    if current_time_obj >= strategy.square_off_time:
+                        logger.info(f"⏰ TIME EXIT: Current time {current_time_obj} >= Square-off time {strategy.square_off_time}")
                         strategy.exit_trade('TIME')
+                
+                # Enforce daily profit/stop limits continuously
+                strategy.monitor_daily_limits()
                 
                 # Process futures LTP
                 if strategy.futures_ltp:
                     strategy.process_ltp(strategy.futures_ltp, current_time)
+                
+                # Check entry conditions continuously (for next candle start entry logic)
+                if not strategy.trading_halted_for_day and not strategy.current_position:
+                    signal = strategy.check_entry_conditions()
+                    if signal and strategy.futures_ltp:
+                        strategy.enter_trade(signal, strategy.futures_ltp)
+                else:
+                    # Monitor for reversals:
+                    # 1. Intra-candle reversal (same candle flips) - DISABLED (commented out, not removed)
+                    # strategy.check_intra_candle_reversal()
+                    # 2. New candle reversal (next candle starts with opposite color)
+                    strategy.check_reversal_on_new_candle()
+                    
+                    # Check exit conditions continuously (profit target, stop-loss, etc.)
+                    exit_reason = strategy.check_exit_conditions()
+                    if exit_reason:
+                        strategy.exit_trade(exit_reason)
                 
                 # Display status
                 status_parts = []
                 if strategy.futures_ltp:
                     status_parts.append(f"Futures: ₹{strategy.futures_ltp:,.2f}")
                 
+                # Show previous completed candle high/low for reference (only from today)
+                prev_candle = strategy.candle_aggregator.get_last_candle()
+                if prev_candle:
+                    # Only show if the candle is from today (not yesterday's historical data)
+                    candle_time = prev_candle.get('start_time') or prev_candle.get('timestamp')
+                    if candle_time:
+                        try:
+                            from trading.utils.time_helpers import IST
+                            if not isinstance(candle_time, datetime):
+                                if isinstance(candle_time, str):
+                                    from dateutil import parser
+                                    candle_time = parser.parse(candle_time)
+                                if candle_time.tzinfo is None:
+                                    candle_time = IST.localize(candle_time)
+                                else:
+                                    candle_time = candle_time.astimezone(IST)
+                            
+                            today = get_ist_now().date()
+                            candle_date = candle_time.date() if isinstance(candle_time, datetime) else None
+                            
+                            # Only display if candle is from today
+                            if candle_date == today:
+                                prev_high = prev_candle.get('high')
+                                prev_low = prev_candle.get('low')
+                                if prev_high is not None and prev_low is not None:
+                                    try:
+                                        prev_high_float = float(prev_high)
+                                        prev_low_float = float(prev_low)
+                                        status_parts.append(
+                                            f"Prev H/L: {prev_high_float:.2f} / {prev_low_float:.2f}"
+                                        )
+                                    except (TypeError, ValueError):
+                                        pass
+                        except Exception:
+                            # Fallback: show anyway if date check fails
+                            prev_high = prev_candle.get('high')
+                            prev_low = prev_candle.get('low')
+                            if prev_high is not None and prev_low is not None:
+                                try:
+                                    prev_high_float = float(prev_high)
+                                    prev_low_float = float(prev_low)
+                                    status_parts.append(
+                                        f"Prev H/L: {prev_high_float:.2f} / {prev_low_float:.2f}"
+                                    )
+                                except (TypeError, ValueError):
+                                    pass
+                
                 # Show Heikin-Ashi indicator (ONLY indicator used)
-                # First, try to get current forming candle's HA color (matches chart)
+                # Calculate both forming candle HA and last completed candle HA for comparison
                 current_forming_candle = strategy.candle_aggregator.get_current_forming_candle()
                 current_ha_color = None
+                last_completed_ha_color = None
+                current_ha_candle = None  # Initialize for scope
+                
+                # Get last completed HA candle
+                last_ha = strategy.heikin_ashi_calc.get_last_candle()
+                last_ha_date = None
+                if last_ha:
+                    ha_open = last_ha['ha_open']
+                    ha_close = last_ha['ha_close']
+                    # Recalculate color to ensure it's correct
+                    if ha_close > ha_open:
+                        last_completed_ha_color = "GREEN"
+                    else:
+                        last_completed_ha_color = "RED"
+                    
+                    # Get date of completed candle for comparison
+                    last_ha_time = last_ha.get('end_time') or last_ha.get('timestamp')
+                    if last_ha_time:
+                        try:
+                            from trading.utils.time_helpers import IST
+                            if not isinstance(last_ha_time, datetime):
+                                if isinstance(last_ha_time, str):
+                                    from dateutil import parser
+                                    last_ha_time = parser.parse(last_ha_time)
+                                if last_ha_time.tzinfo is None:
+                                    last_ha_time = IST.localize(last_ha_time)
+                            if isinstance(last_ha_time, datetime):
+                                last_ha_date = last_ha_time.date()
+                        except:
+                            pass
                 
                 if current_forming_candle and strategy.futures_ltp:
-                    # Calculate HA for current forming candle
-                    from trading.services.heikin_ashi import calculate_heikin_ashi
-                    # Get previous HA candle for continuity
-                    previous_ha = strategy.heikin_ashi_calc.get_last_candle()
-                    previous_ha_dict = None
-                    if previous_ha:
-                        previous_ha_dict = {
-                            'ha_open': previous_ha['ha_open'],
-                            'ha_close': previous_ha['ha_close'],
-                        }
-                    
-                    # Calculate HA for current forming candle
-                    current_ha_candle = calculate_heikin_ashi(current_forming_candle, previous_ha_dict)
+                    # Calculate HA for current forming candle using the strategy's method
+                    # (which handles same-day checks properly)
+                    current_ha_candle = strategy._calculate_forming_ha(current_forming_candle)
                     current_ha_open = current_ha_candle['ha_open']
                     current_ha_close = current_ha_candle['ha_close']
                     
-                    # Determine color
+                    # Determine color (TradingView style: GREEN when HA_Close > HA_Open)
                     if current_ha_close > current_ha_open:
                         current_ha_color = "GREEN"
                     else:
                         current_ha_color = "RED"
-                
-                # Fallback to last completed candle if no forming candle
-                if current_ha_color is None:
-                    last_ha = strategy.heikin_ashi_calc.get_last_candle()
-                    if last_ha:
-                        # Get HA color (TradingView style: GREEN when HA_C > HA_O, RED when HA_C < HA_O)
-                        ha_open = last_ha['ha_open']
-                        ha_close = last_ha['ha_close']
-                        stored_color = last_ha.get('ha_color')
+                    
+                    # Debug: Log HA calculation details if debug mode is enabled
+                    if strategy.debug:
+                        # Convert Decimal to float for formatting
+                        form_o = float(current_forming_candle['open'])
+                        form_h = float(current_forming_candle['high'])
+                        form_l = float(current_forming_candle['low'])
+                        form_c = float(current_forming_candle['close'])
+                        ha_o = float(current_ha_open)
+                        ha_c = float(current_ha_close)
                         
-                        # Recalculate color to ensure it's correct (fixes any stored incorrect values)
-                        if ha_close > ha_open:
-                            current_ha_color = "GREEN"
+                        # Get previous HA for debug display
+                        prev_ha_for_debug = strategy.heikin_ashi_calc.get_last_candle()
+                        if prev_ha_for_debug:
+                            prev_ha_o = f"{float(prev_ha_for_debug['ha_open']):.2f}"
+                            prev_ha_c = f"{float(prev_ha_for_debug['ha_close']):.2f}"
                         else:
-                            current_ha_color = "RED"
+                            prev_ha_o = "N/A"
+                            prev_ha_c = "N/A"
                         
-                        # If stored color differs, log a warning
-                        if stored_color and stored_color != current_ha_color:
-                            logger.warning(f"⚠️ HA color mismatch: stored={stored_color}, calculated={current_ha_color} (HA_C={ha_close}, HA_O={ha_open})")
+                        logger.debug(
+                            f"Forming Candle HA: O={form_o:.2f}, "
+                            f"H={form_h:.2f}, "
+                            f"L={form_l:.2f}, "
+                            f"C={form_c:.2f} | "
+                            f"HA_O={ha_o:.2f}, HA_C={ha_c:.2f}, "
+                            f"Color={current_ha_color} | "
+                            f"Prev HA: O={prev_ha_o}, C={prev_ha_c}"
+                        )
                 
-                if current_ha_color:
-                    ha_emoji = "🟢" if current_ha_color == 'GREEN' else "🔴"
-                    status_parts.append(f"HA: {ha_emoji} {current_ha_color}")
+                # Display both forming and last completed HA colors so terminal matches chart + TradingView
+                if current_ha_color or last_completed_ha_color:
+                    if current_ha_candle and current_ha_color:
+                        forming_emoji = "🟢" if current_ha_color == 'GREEN' else "🔴"
+                        form_ha_o = float(current_ha_candle['ha_open'])
+                        form_ha_c = float(current_ha_candle['ha_close'])
+                        forming_text = f"{forming_emoji} {current_ha_color} (O:{form_ha_o:.2f} C:{form_ha_c:.2f})"
+                    else:
+                        forming_text = "⏳"
+                    
+                    # Check if completed candle is from same day
+                    current_date = get_ist_now().date()
+                    if last_ha and last_completed_ha_color:
+                        completed_emoji = "🟢" if last_completed_ha_color == 'GREEN' else "🔴"
+                        last_ha_o = float(last_ha['ha_open'])
+                        last_ha_c = float(last_ha['ha_close'])
+                        
+                        # Show date if different day
+                        if last_ha_date and last_ha_date != current_date:
+                            date_str = last_ha_date.strftime('%m/%d')
+                            completed_text = f"{completed_emoji} {last_completed_ha_color} [{date_str}] (O:{last_ha_o:.2f} C:{last_ha_c:.2f})"
+                        else:
+                            completed_text = f"{completed_emoji} {last_completed_ha_color} (O:{last_ha_o:.2f} C:{last_ha_c:.2f})"
+                    else:
+                        completed_text = "⏳"
+                    
+                    # For first candle of day, emphasize forming candle
+                    if last_ha_date and last_ha_date != current_date:
+                        # No completed candle from today yet - show only forming
+                        status_parts.append(f"HA: {forming_text} (Today's first candle - compare with chart)")
+                    else:
+                        status_parts.append(f"HA: Forming={forming_text} | Completed={completed_text}")
                 else:
                     status_parts.append("HA: ⏳ Initializing...")
                 
                 if strategy.current_position:
                     entry = strategy.current_position
                     option_ltp = strategy.get_option_ltp() or entry['entry_premium']
-                    pnl = calculate_pnl(entry['entry_premium'], option_ltp, entry['side'], LOT_SIZE)
+                    pnl = calculate_pnl(entry['entry_premium'], option_ltp, entry['side'], strategy.quantity)
                     status_parts.append(
                         f"IN TRADE: {entry['option_symbol']} | Entry: ₹{entry['entry_premium']:.2f} | "
                         f"Current: ₹{option_ltp:.2f} | P&L: ₹{pnl:.2f}"
                     )
+                
+                status_parts.append(
+                    f"Daily P&L: ₹{strategy.daily_pnl:.2f} / ₹{strategy.daily_profit_target:.2f} | "
+                    f"Stop: -₹{strategy.daily_stop_loss:.2f}"
+                )
+                if strategy.trading_halted_for_day:
+                    status_parts.append("Status: HALTED")
                 
                 if status_parts:
                     time_str = current_time.strftime('%H:%M:%S')

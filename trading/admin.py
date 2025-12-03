@@ -41,6 +41,21 @@ class StrategyAdmin(admin.ModelAdmin):
             'fields': ('yesterday_closing_price',),
             'description': "Yesterday's futures closing price (used for ATM strike selection)"
         }),
+        ('Heikin Ashi Strategy Parameters', {
+            'fields': (
+                'base_daily_target_per_lot',
+                'daily_stop_loss_factor',
+                'per_trade_profit_target',
+                'target_points',
+                'option_target_pct',
+                'stoploss_option_pct',
+                'stoploss_futures_points',
+                'square_off_time_ha',
+                'trade_start_time_ha',
+                'trade_end_time_ha',
+            ),
+            'description': 'Parameters specific to Heikin Ashi Strategy. If empty, code-level constants will be used as defaults.'
+        }),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at'),
             'classes': ('collapse',)
@@ -114,7 +129,7 @@ class TradeLogAdmin(admin.ModelAdmin):
     search_fields = ['entry_symbol', 'entry_side']
     readonly_fields = ['entry_time', 'exit_time', 'created_at', 'updated_at', 'pnl_percentage_display', 'duration_display']
     date_hierarchy = 'entry_time'
-    list_per_page = 50
+    list_per_page = 20
     change_list_template = 'admin/trading/tradelog/change_list.html'
     
     fieldsets = (
@@ -150,6 +165,11 @@ class TradeLogAdmin(admin.ModelAdmin):
     def changelist_view(self, request, extra_context=None):
         """Override to add P&L summary"""
         response = super().changelist_view(request, extra_context=extra_context)
+
+        # Some admin actions (e.g., bulk updates) return HttpResponseRedirect without context_data.
+        # Only attempt to build the summary if context_data exists.
+        if not hasattr(response, 'context_data'):
+            return response
         
         try:
             # Get the filtered queryset (respects date filters, search, etc.)
@@ -163,7 +183,6 @@ class TradeLogAdmin(admin.ModelAdmin):
             losing_trades = closed_trades.filter(pnl_value__lt=0).count()
             
             # Calculate totals
-            from decimal import Decimal
             total_pnl = closed_trades.aggregate(
                 total=models.Sum('pnl_value')
             )['total'] or Decimal('0.00')

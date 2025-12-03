@@ -124,9 +124,10 @@ class HeikinAshiCalculator:
             
             if last_ha_time and current_candle_time:
                 try:
-                    # Ensure both are datetime objects
+                    # Ensure both are datetime objects and convert to IST timezone
                     from trading.utils.time_helpers import IST
                     
+                    # Convert last_ha_time to IST
                     if not isinstance(last_ha_time, datetime):
                         if isinstance(last_ha_time, str):
                             try:
@@ -134,9 +135,15 @@ class HeikinAshiCalculator:
                             except:
                                 from dateutil import parser
                                 last_ha_time = parser.parse(last_ha_time)
+                    
+                    if isinstance(last_ha_time, datetime):
                         if last_ha_time.tzinfo is None:
                             last_ha_time = IST.localize(last_ha_time)
+                        else:
+                            # Convert to IST if already timezone-aware
+                            last_ha_time = last_ha_time.astimezone(IST)
                     
+                    # Convert current_candle_time to IST
                     if not isinstance(current_candle_time, datetime):
                         if isinstance(current_candle_time, str):
                             try:
@@ -144,10 +151,15 @@ class HeikinAshiCalculator:
                             except:
                                 from dateutil import parser
                                 current_candle_time = parser.parse(current_candle_time)
+                    
+                    if isinstance(current_candle_time, datetime):
                         if current_candle_time.tzinfo is None:
                             current_candle_time = IST.localize(current_candle_time)
+                        else:
+                            # Convert to IST if already timezone-aware
+                            current_candle_time = current_candle_time.astimezone(IST)
                     
-                    # Calculate time difference
+                    # Calculate time difference (both should now be in IST)
                     if isinstance(last_ha_time, datetime) and isinstance(current_candle_time, datetime):
                         time_diff = current_candle_time - last_ha_time
                         
@@ -169,11 +181,36 @@ class HeikinAshiCalculator:
                         # If not datetime objects, use previous HA (fallback)
                         previous_ha = last_ha
                 except Exception as e:
-                    logger.warning(f"Error checking gap, using previous HA: {e}")
-                    previous_ha = last_ha
+                    logger.warning(f"Error checking gap, resetting HA (safer): {e}")
+                    # If gap check fails, reset HA to be safe (could be overnight gap)
+                    previous_ha = None
             else:
-                # If timestamps missing, use previous HA (fallback)
-                previous_ha = last_ha
+                # If timestamps missing, check date difference as fallback
+                try:
+                    from trading.utils.time_helpers import IST
+                    # Try to get dates from timestamps if available
+                    if isinstance(last_ha_time, datetime):
+                        last_date = last_ha_time.date() if last_ha_time.tzinfo else None
+                    else:
+                        last_date = None
+                    
+                    if isinstance(current_candle_time, datetime):
+                        current_date = current_candle_time.date() if current_candle_time.tzinfo else None
+                    else:
+                        current_date = None
+                    
+                    # If we can determine dates and they're different, reset HA
+                    if last_date and current_date and last_date != current_date:
+                        logger.info(f"🔄 Different trading day detected ({last_date} → {current_date}), resetting HA")
+                        previous_ha = None
+                    else:
+                        # If we can't verify, reset to be safe
+                        logger.warning("Cannot verify gap, resetting HA to be safe")
+                        previous_ha = None
+                except:
+                    # If all else fails, reset HA to be safe
+                    logger.warning("Cannot verify gap, resetting HA to be safe")
+                    previous_ha = None
         else:
             # No previous HA candles
             previous_ha = None
