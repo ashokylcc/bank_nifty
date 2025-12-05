@@ -232,16 +232,21 @@ class Order(models.Model):
 class TradeLog(models.Model):
     """Complete trade log with entry/exit"""
     EXIT_REASONS = [
+        # Generic reasons
         ('TARGET', 'Target Hit'),
         ('STOPLOSS', 'Stoploss Hit'),
         ('TIME', 'Time Exit (Square-off)'),
         ('MARKET_CLOSE', 'Market Close'),
         ('MANUAL', 'Manual Exit'),
         ('TRAILING', 'Trailing Stoploss'),
-        # Strategy-specific detailed reasons
+        # Strategy-specific detailed reasons (Heikin Ashi strategy uses these)
+        ('PROFIT_TARGET', 'Per-trade Profit Target Hit'),
         ('FUTURES_TARGET', 'Futures Target Hit'),
         ('OPTION_TARGET', 'Option Target Hit'),
         ('TREND_REVERSAL', 'HA Trend Reversal'),
+        ('DAILY_TARGET', 'Daily Profit Target Hit'),
+        ('DAILY_STOP', 'Daily Stop-loss Hit'),
+        ('DAILY_HALT', 'Daily Trading Halt'),
     ]
     
     strategy = models.ForeignKey(Strategy, on_delete=models.CASCADE, related_name='trades')
@@ -317,7 +322,10 @@ class TradeLog(models.Model):
         if not self.exit_time:
             return None
         delta = self.exit_time - self.entry_time
-        return int(delta.total_seconds() / 60)
+        # Round to nearest minute instead of always flooring,
+        # so trades slightly over 30 seconds show as 1m instead of 0m.
+        total_minutes = delta.total_seconds() / 60
+        return int(round(total_minutes))
     
     @property
     def pnl_percentage(self):

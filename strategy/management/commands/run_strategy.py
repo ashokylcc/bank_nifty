@@ -81,16 +81,16 @@ class Command(BaseCommand):
                 self.stdout.write(f"🔑 API Key: {API_KEY[:20]}...")
                 
                 self.stdout.write("🔐 Getting encryption key...")
-                enc_key = get_encryption_key(USER_ID)
+            enc_key = get_encryption_key(USER_ID)
                 self.stdout.write(f"✅ Encryption key: {enc_key[:20]}...")
                 
                 self.stdout.write("🔐 Getting session ID...")
-                session_id = get_session_id(USER_ID, API_KEY, enc_key)
+            session_id = get_session_id(USER_ID, API_KEY, enc_key)
                 self.stdout.write(f"✅ Session ID: {session_id[:20]}...")
                 
                 if not session_id:
                     raise Exception("Session ID is None - login failed")
-                self.stdout.write(self.style.SUCCESS("🔐 Session login successful."))
+            self.stdout.write(self.style.SUCCESS("🔐 Session login successful."))
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"❌ Login failed: {e}"))
             self.stdout.write("🔄 Switching to simulation mode...")
@@ -100,8 +100,8 @@ class Command(BaseCommand):
         # 🌐 Start WebSocket (only if not simulating)
         ltp_streamer = None
         if not simulate:
-            ltp_streamer = WebSocketLTP(username=USER_ID, session_id=session_id, exchange="NFO")
-            ltp_streamer.start()
+        ltp_streamer = WebSocketLTP(username=USER_ID, session_id=session_id, exchange="NFO")
+        ltp_streamer.start()
             
             # 🎯 NEW: Quick connection test
             self.stdout.write("🔍 Testing WebSocket connection...")
@@ -339,7 +339,7 @@ class Command(BaseCommand):
         self.stdout.write("-" * 30)
         
         if not simulate and ltp_streamer:
-            ltp_streamer.subscribe(option_symbol)
+        ltp_streamer.subscribe(option_symbol)
 
         # Get entry price with retries
         if simulate:
@@ -348,16 +348,16 @@ class Command(BaseCommand):
             entry_price = random.uniform(50, 200)  # Simulate option price
             self.stdout.write(self.style.SUCCESS(f"💰 Simulated Entry Price: ₹{entry_price:.2f}"))
         else:
-            max_retries = 3
+        max_retries = 3
             entry_price = None
-            for attempt in range(max_retries):
-                entry_price = ltp_streamer.get_ltp(option_symbol)
-                if entry_price:
-                    break
+        for attempt in range(max_retries):
+            entry_price = ltp_streamer.get_ltp(option_symbol)
+            if entry_price:
+                break
                 self.stdout.write(f"🔁 Retry {attempt + 1}/{max_retries}: Waiting for Option LTP...")
                 time.sleep(3)
 
-            if not entry_price:
+        if not entry_price:
                 self.stdout.write(self.style.ERROR("❌ Unable to get Option LTP after retries"))
                 return
 
@@ -374,8 +374,8 @@ class Command(BaseCommand):
             if current_time < market_start or current_time > market_end:
                 self.stdout.write(self.style.ERROR(f"❌ Market closed! Current time: {current_time.strftime('%H:%M:%S')} | Market hours: 09:15-15:30"))
                 self.stdout.write(self.style.WARNING("💡 Strategy will work during market hours only"))
-                return
-            
+            return
+
             try:
                 instrument = ltp_streamer.instrument_map.get(option_symbol)
                 if not instrument:
@@ -464,8 +464,8 @@ class Command(BaseCommand):
                 
                 # Check if we've reached trade end time (9:45 AM)
                 if current_time >= SQUARE_OFF_TIME:
-                    status = "TIME EXIT"
-                    exit_price = ltp_streamer.get_ltp(option_symbol)
+                status = "TIME EXIT"
+                exit_price = ltp_streamer.get_ltp(option_symbol)
                     if not exit_price:
                         exit_price = entry_price  # Fallback to entry price
                     # Place SELL market order to square-off (immediate execution)
@@ -484,9 +484,9 @@ class Command(BaseCommand):
                         self.stdout.write(self.style.SUCCESS(f"✅ Square-off SELL placed (time exit): {sell_order_id} | Market Order | Quantity: {QUANTITY} ({LOT_SIZE} lots)"))
                     except Exception as e:
                         self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on time exit: {e}"))
-                    break
+                break
 
-                current_ltp = ltp_streamer.get_ltp(option_symbol)
+            current_ltp = ltp_streamer.get_ltp(option_symbol)
                 if not current_ltp:
                     time.sleep(1)
                     continue
@@ -495,9 +495,9 @@ class Command(BaseCommand):
                 pnl = (current_ltp - entry_price) * LOT_SIZE
 
                 # Check target and stoploss
-                if pnl >= TARGET_PROFIT:
-                    status = "TARGET HIT"
-                    exit_price = current_ltp
+            if pnl >= TARGET_PROFIT:
+                status = "TARGET HIT"
+                exit_price = current_ltp
                     # Place SELL market order to book profit (immediate execution)
                     try:
                         instrument = ltp_streamer.instrument_map.get(option_symbol)
@@ -515,10 +515,10 @@ class Command(BaseCommand):
                     except Exception as e:
                         self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on target: {e}"))
                     self.stdout.write(self.style.SUCCESS(f"🎯 Target Hit! PnL: ₹{pnl:.2f}"))
-                    break
-                elif pnl <= -STOPLOSS:
-                    status = "STOPLOSS HIT"
-                    exit_price = current_ltp
+                break
+            elif pnl <= -STOPLOSS:
+                status = "STOPLOSS HIT"
+                exit_price = current_ltp
                     # Place SELL market order to cut loss (immediate execution)
                     try:
                         instrument = ltp_streamer.instrument_map.get(option_symbol)
@@ -536,7 +536,7 @@ class Command(BaseCommand):
                     except Exception as e:
                         self.stdout.write(self.style.ERROR(f"❌ Failed to square-off on stoploss: {e}"))
                     self.stdout.write(self.style.ERROR(f"🛑 Stoploss Hit! PnL: ₹{pnl:.2f}"))
-                    break
+                break
 
                 # Log current status every 30 seconds
                 elapsed = (datetime.now(ist) - entry_time).seconds

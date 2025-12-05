@@ -1357,22 +1357,22 @@ class HeikinAshiStrategy:
                 )
             
             # Check entry/exit using next-candle logic
-            if not self.current_position:
-                signal = self.check_entry_conditions()
-                if signal and self.futures_ltp:
-                    self.enter_trade(signal, self.futures_ltp)
+                if not self.current_position:
+                    signal = self.check_entry_conditions()
+                    if signal and self.futures_ltp:
+                        self.enter_trade(signal, self.futures_ltp)
             else:
                 # Monitor the newly forming candle for reversal
                 self.check_reversal_on_new_candle()
-            
-            # Check additional exit conditions (targets, SL, etc.)
-            if self.current_position:
-                exit_reason = self.check_exit_conditions()
-                if exit_reason:
-                    self.exit_trade(exit_reason)
                 
+            # Check additional exit conditions (targets, SL, etc.)
+                if self.current_position:
+                    exit_reason = self.check_exit_conditions()
+                    if exit_reason:
+                        self.exit_trade(exit_reason)
+                    
                 # Update previous HA for next reversal check
-                self.previous_ha = self.heikin_ashi_calc.get_last_candle()
+                    self.previous_ha = self.heikin_ashi_calc.get_last_candle()
 
 
 class Command(BaseCommand):
