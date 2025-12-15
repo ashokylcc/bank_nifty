@@ -128,6 +128,14 @@ class Strategy(models.Model):
         default="15:30:00",
         help_text="Trading end time for Heikin Ashi strategy (default: 15:30 = 3:30 PM)"
     )
+    trailing_active_after_ha = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('4000'),
+        help_text="Activate trailing daily profit lock after this total profit in rupees (e.g. ₹4000)"
+    )
+    trailing_buffer_ha = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('1000'),
+        help_text="Maximum profit give-back from peak before squaring off (e.g. ₹1000)"
+    )
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

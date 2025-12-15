@@ -18,6 +18,7 @@ class StrategyAdmin(admin.ModelAdmin):
     search_fields = ['name']
     readonly_fields = ['created_at', 'updated_at']
     
+    # Default fieldsets (for non-SuperTrend strategies)
     fieldsets = (
         ('Basic Information', {
             'fields': ('name', 'enabled')
@@ -53,6 +54,8 @@ class StrategyAdmin(admin.ModelAdmin):
                 'square_off_time_ha',
                 'trade_start_time_ha',
                 'trade_end_time_ha',
+                'trailing_active_after_ha',
+                'trailing_buffer_ha',
             ),
             'description': 'Parameters specific to Heikin Ashi Strategy. If empty, code-level constants will be used as defaults.'
         }),
@@ -75,6 +78,71 @@ class StrategyAdmin(admin.ModelAdmin):
         queryset.update(enabled=False)
         self.message_user(request, f"{queryset.count()} strategy(ies) disabled (kill switch ON)")
     disable_strategy.short_description = "Disable selected strategies (kill switch ON)"
+
+    # --- Custom fieldsets for SuperTrend strategy ---------------------------
+
+    def get_fieldsets(self, request, obj=None):
+        """
+        For the 'SuperTrend Option Buying Strategy' row, show a simplified
+        field layout with only the fields that matter for that strategy.
+        For all other strategies fall back to the default fieldsets above.
+        """
+        # When adding a new object, use default layout
+        if obj is None or not isinstance(obj, Strategy):
+            return super().get_fieldsets(request, obj)
+
+        if obj.name == "SuperTrend Option Buying Strategy":
+            return (
+                ('Basic Information', {
+                    'fields': ('name', 'enabled')
+                }),
+                ('Lot & Daily Targets (per lot, auto-scales with num_lots)', {
+                    'fields': (
+                        'lot_size',
+                        'num_lots',
+                        'base_daily_target_per_lot',  # e.g. 1000 per lot
+                        'max_daily_loss',             # e.g. 2000 per lot
+                    ),
+                    'description': (
+                        "Daily Target = base_daily_target_per_lot × num_lots "
+                        "(e.g. 1000 × 2 = 2000). "
+                        "Daily SL = max_daily_loss × num_lots (e.g. 2000 × 2 = 4000)."
+                    )
+                }),
+                ('Per-trade Option TP/SL (points on premium)', {
+                    'fields': (
+                        'target_points',       # e.g. 15
+                        'min_stoploss_points', # e.g. 10
+                    ),
+                    'description': (
+                        "These are option points. Example: entry 720, target_points=15 "
+                        "→ exit at 735; min_stoploss_points=10 → exit at 710."
+                    )
+                }),
+                ('Time Window', {
+                    'fields': (
+                        'trade_start_time',
+                        'trade_end_time',
+                        'square_off_time_ha',
+                    ),
+                    'description': (
+                        "Strategy trades only between trade_start_time and "
+                        "trade_end_time and forces exit at square_off_time_ha "
+                        "(e.g. 15:20)."
+                    )
+                }),
+                ('Reference Price', {
+                    'fields': ('yesterday_closing_price',),
+                    'description': "Optional: yesterday's futures close for ATM reference."
+                }),
+                ('Timestamps', {
+                    'fields': ('created_at', 'updated_at'),
+                    'classes': ('collapse',)
+                }),
+            )
+
+        # Default layout for all other strategies
+        return super().get_fieldsets(request, obj)
 
 
 @admin.register(Signal)

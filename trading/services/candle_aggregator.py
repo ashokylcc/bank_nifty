@@ -13,16 +13,13 @@ logger = logging.getLogger(__name__)
 
 def get_exchange_candle_start(timestamp: datetime, interval_minutes: int = 15) -> datetime:
     """
-    Get the exchange candle start time for a given timestamp
-    Uses strict 15-minute boundaries: :00-:14, :15-:29, :30-:44, :45-:59
+    Get the exchange candle start time for a given timestamp.
     
-    Exchange candle boundaries (TradingView style):
-    - 09:00:00 - 09:14:59 (first bucket)
-    - 09:15:00 - 09:29:59
-    - 09:30:00 - 09:44:59
-    - 09:45:00 - 09:59:59
-    - 10:00:00 - 10:14:59
-    - etc.
+    For 15-minute candles this preserves the original strict boundaries:
+        :00-:14, :15-:29, :30-:44, :45-:59
+    
+    For other intervals (e.g. 1-minute) it floors the timestamp to the
+    nearest lower interval boundary while keeping seconds/microseconds at 0.
     
     Args:
         timestamp: Input timestamp (must be in IST)
@@ -37,20 +34,14 @@ def get_exchange_candle_start(timestamp: datetime, interval_minutes: int = 15) -
     elif timestamp.tzinfo != IST:
         timestamp = timestamp.astimezone(IST)
     
-    # Get hour and minute
-    hour = timestamp.hour
     minute = timestamp.minute
     
-    # Calculate which 15-minute bucket this timestamp falls into
-    # Buckets: :00-:14, :15-:29, :30-:44, :45-:59
-    if minute < 15:
-        bucket_minute = 0
-    elif minute < 30:
-        bucket_minute = 15
-    elif minute < 45:
-        bucket_minute = 30
-    else:
-        bucket_minute = 45
+    # Generic bucket calculation works for both 15-min and 1-min intervals:
+    #   e.g. 15 -> 0,15,30,45 ; 1 -> every minute ; 5 -> 0,5,10,...
+    if interval_minutes <= 0:
+        interval_minutes = 15  # Safe fallback
+    
+    bucket_minute = (minute // interval_minutes) * interval_minutes
     
     candle_start = timestamp.replace(minute=bucket_minute, second=0, microsecond=0)
     return candle_start
